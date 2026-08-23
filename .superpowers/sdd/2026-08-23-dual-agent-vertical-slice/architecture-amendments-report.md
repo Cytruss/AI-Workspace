@@ -2,7 +2,7 @@
 
 ## Result
 
-REMEDIATED — PENDING RE-REVIEW. The first, second, third, fourth, and fifth architecture reviews failed. Their findings have been addressed in successive remediation commits, but this report does not claim review acceptance.
+PASS. The first, second, third, fourth, and fifth architecture reviews failed and were addressed in successive remediation commits. The fifth re-review accepted the architecture amendments with no new Critical or Important findings.
 
 Architecture amendment commit: `8565acca7238b842076e9ee8eb0f5eed9a1a533a` (`docs: strengthen architecture for structured debate`).
 
@@ -18,6 +18,7 @@ Architecture/remediation history:
 - `ba5bb22a45d9ef5532bd3092a8ce3f64fb898c46` — fourth-review model-execution, Claude fallback, and executable-discovery remediation.
 - `0e568a6c348706168cea165c5eff2774786eeafc` — fourth-remediation report and ledger evidence.
 - `366600941188c0afc8899f3bc5a43eb3587ab37f` — fifth-review managed-settings, native-executable, and effort-capability remediation.
+- `2eb1f69ebcda98ef74a6876c5ff431d19ea2e530` — fifth-remediation report and ledger evidence.
 
 ## Changed files
 
@@ -43,15 +44,15 @@ No runtime source code was changed. The unused Codex SDK dependency was removed 
 
 The following commands were run after the final architecture edits:
 
-| Command             | Result |
-| ------------------- | ------ |
+| Command             | Result                                            |
+| ------------------- | ------------------------------------------------- |
 | `pnpm format`       | PASS; all formatter-covered files were unchanged. |
-| `pnpm format:check` | PASS; all matched files use Prettier style. |
-| `pnpm lint`         | PASS; exit 0. |
-| `pnpm typecheck`    | PASS; exit 0. |
-| `pnpm test`         | PASS; 1 test file and 1 test passed. |
-| `pnpm build`        | PASS; exit 0. |
-| `git diff --check`  | PASS; no whitespace errors. |
+| `pnpm format:check` | PASS; all matched files use Prettier style.       |
+| `pnpm lint`         | PASS; exit 0.                                     |
+| `pnpm typecheck`    | PASS; exit 0.                                     |
+| `pnpm test`         | PASS; 1 test file and 1 test passed.              |
+| `pnpm build`        | PASS; exit 0.                                     |
+| `git diff --check`  | PASS; no whitespace errors.                       |
 
 These checks passed for the first amendment, but the subsequent architecture review still failed on substantive design completeness. The first-pass command success did not establish review acceptance.
 
@@ -72,16 +73,16 @@ The final verification evidence for this remediation is appended below before th
 
 ## Remediation verification evidence
 
-| Command                          | Result |
-| -------------------------------- | ------ |
+| Command                          | Result                                                            |
+| -------------------------------- | ----------------------------------------------------------------- |
 | `pnpm install --frozen-lockfile` | PASS; lockfile was current and the Codex SDK package was removed. |
-| `pnpm format`                    | PASS; all formatter-covered files were unchanged. |
-| `pnpm format:check`              | PASS; all matched files use Prettier style. |
-| `pnpm lint`                      | PASS; exit 0. |
-| `pnpm typecheck`                 | PASS; exit 0. |
-| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
-| `pnpm build`                     | PASS; exit 0. |
-| `git diff --check`               | PASS; no whitespace errors. |
+| `pnpm format`                    | PASS; all formatter-covered files were unchanged.                 |
+| `pnpm format:check`              | PASS; all matched files use Prettier style.                       |
+| `pnpm lint`                      | PASS; exit 0.                                                     |
+| `pnpm typecheck`                 | PASS; exit 0.                                                     |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed.                              |
+| `pnpm build`                     | PASS; exit 0.                                                     |
+| `git diff --check`               | PASS; no whitespace errors.                                       |
 
 The complete remediation diff was inspected against each review finding. Tracked-file scans found no active SDK dependency or SDK-based implementation instruction, stale ADR filename, personal machine path, personal name, email address, project-specific sample identifier, Polish-language public text, or secret. Historical ledger text labels the rejected SDK choice as superseded rather than active.
 
@@ -99,16 +100,16 @@ The spec, ADRs, plan types, migration sketch, repository interfaces, implementat
 
 ## Second-remediation verification evidence
 
-| Command                          | Result |
-| -------------------------------- | ------ |
-| `pnpm install --frozen-lockfile` | PASS; lockfile was current. |
+| Command                          | Result                                            |
+| -------------------------------- | ------------------------------------------------- |
+| `pnpm install --frozen-lockfile` | PASS; lockfile was current.                       |
 | `pnpm format`                    | PASS; all formatter-covered files were unchanged. |
-| `pnpm format:check`              | PASS; all matched files use Prettier style. |
-| `pnpm lint`                      | PASS; exit 0. |
-| `pnpm typecheck`                 | PASS; exit 0. |
-| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
-| `pnpm build`                     | PASS; exit 0. |
-| `git diff --check`               | PASS; no whitespace errors. |
+| `pnpm format:check`              | PASS; all matched files use Prettier style.       |
+| `pnpm lint`                      | PASS; exit 0.                                     |
+| `pnpm typecheck`                 | PASS; exit 0.                                     |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed.              |
+| `pnpm build`                     | PASS; exit 0.                                     |
+| `git diff --check`               | PASS; no whitespace errors.                       |
 
 Tracked-file scans found no stale active ADR-0004 hardened-CLI link, active SDK dependency or implementation instruction, personal machine path, personal name, email address, project-specific identifier, secret, or non-English public prose. Historical ADR-0004 references to the SDK are intentionally retained as superseded decision history.
 
@@ -126,16 +127,16 @@ The same commit adds ADR-0008 for allowlisted concrete provider model selections
 
 ## Third-remediation verification evidence
 
-| Command                          | Result |
-| -------------------------------- | ------ |
-| `pnpm install --frozen-lockfile` | PASS; lockfile was current. |
+| Command                          | Result                                            |
+| -------------------------------- | ------------------------------------------------- |
+| `pnpm install --frozen-lockfile` | PASS; lockfile was current.                       |
 | `pnpm format`                    | PASS; all formatter-covered files were unchanged. |
-| `pnpm format:check`              | PASS; all matched files use Prettier style. |
-| `pnpm lint`                      | PASS; exit 0. |
-| `pnpm typecheck`                 | PASS; exit 0. |
-| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
-| `pnpm build`                     | PASS; exit 0. |
-| `git diff --check`               | PASS; no whitespace errors. |
+| `pnpm format:check`              | PASS; all matched files use Prettier style.       |
+| `pnpm lint`                      | PASS; exit 0.                                     |
+| `pnpm typecheck`                 | PASS; exit 0.                                     |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed.              |
+| `pnpm build`                     | PASS; exit 0.                                     |
+| `git diff --check`               | PASS; no whitespace errors.                       |
 
 Tracked-file scans found no active abstract model-profile vocabulary, stale ADR-0008 filename, active SDK dependency/instruction, personal machine path/name/email, project-specific identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004.
 
@@ -153,16 +154,16 @@ Setup and doctor now resolve commands in a portable order: configured explicit p
 
 ## Fourth-remediation verification evidence
 
-| Command                          | Result |
-| -------------------------------- | ------ |
-| `pnpm install --frozen-lockfile` | PASS; lockfile was current. |
+| Command                          | Result                                                  |
+| -------------------------------- | ------------------------------------------------------- |
+| `pnpm install --frozen-lockfile` | PASS; lockfile was current.                             |
 | `pnpm format`                    | PASS after sandbox permission allowed dependency reads. |
-| `pnpm format:check`              | PASS; all matched files use Prettier style. |
-| `pnpm lint`                      | PASS; exit 0. |
-| `pnpm typecheck`                 | PASS; exit 0. |
-| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
-| `pnpm build`                     | PASS; exit 0. |
-| `git diff --check`               | PASS; no whitespace errors. |
+| `pnpm format:check`              | PASS; all matched files use Prettier style.             |
+| `pnpm lint`                      | PASS; exit 0.                                           |
+| `pnpm typecheck`                 | PASS; exit 0.                                           |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed.                    |
+| `pnpm build`                     | PASS; exit 0.                                           |
+| `git diff --check`               | PASS; no whitespace errors.                             |
 
 The full architecture diff was inspected for spec/plan contradictions. Tracked-file scans found no personal absolute path, personal name, email address, numeric Discord identifier, secret, active SDK dependency/instruction, stale singular observed-model persistence contract, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative.
 
@@ -180,17 +181,21 @@ Explicit `requestedEffort` is now fail-closed: the capability probe must expose 
 
 ## Fifth-remediation verification evidence
 
-| Command                          | Result |
-| -------------------------------- | ------ |
-| `pnpm install --frozen-lockfile` | PASS; lockfile was current. |
+| Command                          | Result                                            |
+| -------------------------------- | ------------------------------------------------- |
+| `pnpm install --frozen-lockfile` | PASS; lockfile was current.                       |
 | `pnpm format`                    | PASS; all formatter-covered files were unchanged. |
-| `pnpm format:check`              | PASS; all matched files use Prettier style. |
-| `pnpm lint`                      | PASS; exit 0. |
-| `pnpm typecheck`                 | PASS; exit 0. |
-| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
-| `pnpm build`                     | PASS; exit 0. |
-| `git diff --check`               | PASS; no whitespace errors. |
+| `pnpm format:check`              | PASS; all matched files use Prettier style.       |
+| `pnpm lint`                      | PASS; exit 0.                                     |
+| `pnpm typecheck`                 | PASS; exit 0.                                     |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed.              |
+| `pnpm build`                     | PASS; exit 0.                                     |
+| `git diff --check`               | PASS; no whitespace errors.                       |
 
 The complete architecture diff was inspected against all fifth-review findings. Tracked-file scans found no personal absolute path, personal name, email address, numeric Discord identifier, secret, active SDK dependency/instruction, fail-open effort rule, Windows shell-shim execution path, unconditional managed-fallback prevention claim, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative.
 
-Review status after fifth remediation: PENDING RE-REVIEW.
+## Fifth re-review
+
+PASS on 2026-08-23. The reviewer concluded that the amended architecture resolves the prior Critical and Important findings and reported no new Critical or Important findings.
+
+Final architecture-amendment status: PASS.
