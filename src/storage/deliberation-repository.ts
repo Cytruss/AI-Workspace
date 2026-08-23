@@ -199,6 +199,8 @@ function parseImmutableJson(json: string, label: string): unknown {
   }
 }
 function finalPositionSemantic(input: {
+  id: string;
+  createdAt: string;
   sessionId: string;
   boardId: string;
   roundId: string;
@@ -212,6 +214,8 @@ function finalPositionSemantic(input: {
   }[];
 }): string {
   return canonicalJson({
+    id: input.id,
+    createdAt: input.createdAt,
     sessionId: input.sessionId,
     boardId: input.boardId,
     roundId: input.roundId,
@@ -234,6 +238,8 @@ function finalPositionSemantic(input: {
   });
 }
 function verdictSemantic(input: {
+  id: string;
+  createdAt: string;
   sessionId: string;
   boardId: string;
   canonicalClaimId: string;
@@ -245,6 +251,8 @@ function verdictSemantic(input: {
   verdict: unknown;
 }): string {
   return canonicalJson({
+    id: input.id,
+    createdAt: input.createdAt,
     sessionId: input.sessionId,
     boardId: input.boardId,
     canonicalClaimId: input.canonicalClaimId,
@@ -596,7 +604,10 @@ export class DeliberationRepository {
     return this.database.transaction(() => {
       const linked = this.database
         .prepare(
-          `SELECT 1 FROM claim_boards b JOIN debate_rounds d ON d.id=? AND d.session_id=b.session_id JOIN agent_runs r ON r.id=? AND r.session_id=b.session_id AND r.round_id=d.id AND r.agent_id=? WHERE b.id=? AND b.session_id=?`,
+          `SELECT 1 FROM claim_boards b
+           JOIN debate_rounds d ON d.id=? AND d.session_id=b.session_id AND d.phase='final' AND d.status IN ('completed','partial') AND d.output_board_id=b.id AND d.finished_at IS NOT NULL
+           JOIN agent_runs r ON r.id=? AND r.session_id=b.session_id AND r.round_id=d.id AND r.agent_id=? AND r.phase='final' AND r.status='completed' AND r.response_json IS NOT NULL AND r.finished_at IS NOT NULL AND r.output_board_id=b.id
+           WHERE b.id=? AND b.session_id=?`,
         )
         .get(
           input.roundId,
@@ -607,7 +618,12 @@ export class DeliberationRepository {
         );
       if (linked === undefined)
         throw new Error(
-          "Final position links must share a session, round, board, and agent",
+          "Final position requires a completed final response and finalized matching round output",
+        );
+      const producingRun = this.sessions.getAgentRun(input.agentRunId);
+      if (producingRun.response === undefined)
+        throw new Error(
+          "Final position producer is missing its final response",
         );
       const ids = new Set<string>();
       for (const stance of input.stances) {
@@ -617,8 +633,10 @@ export class DeliberationRepository {
       }
       const id = input.id ?? randomUUID();
       const json = canonicalJson(input.position);
-      const contentHash = hash(finalPositionSemantic(input));
       const createdAt = input.createdAt ?? new Date().toISOString();
+      const contentHash = hash(
+        finalPositionSemantic({ ...input, id, createdAt }),
+      );
       this.database
         .prepare(
           "INSERT INTO final_positions (id, session_id, board_id, round_id, agent_run_id, agent_id, position_json, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -654,33 +672,93 @@ export class DeliberationRepository {
     if (!new Set(["SUPPORTED", "UNSUPPORTED"]).has(input.evidenceSupport))
       throw new Error("Invalid verdict evidence support");
     return this.database.transaction(() => {
-      const linked = this.database
+      const claim = this.database
         .prepare(
-          `SELECT 1 FROM claims c JOIN claim_boards b ON b.id=c.board_id
-      WHERE b.id=? AND b.session_id=? AND c.canonical_id=?
-      AND (? IS NULL OR EXISTS (SELECT 1 FROM debate_rounds d WHERE d.id=? AND d.session_id=b.session_id))
-      AND (? IS NULL OR EXISTS (SELECT 1 FROM agent_runs r WHERE r.id=? AND r.session_id=b.session_id AND r.agent_id='codex'))
-      AND (? IS NULL OR EXISTS (SELECT 1 FROM agent_runs r WHERE r.id=? AND r.session_id=b.session_id AND r.agent_id='claude'))`,
+          "SELECT 1 FROM claims c JOIN claim_boards b ON b.id=c.board_id WHERE b.id=? AND b.session_id=? AND c.canonical_id=?",
         )
-        .get(
-          input.boardId,
-          input.sessionId,
-          input.canonicalClaimId,
-          input.roundId ?? null,
-          input.roundId ?? null,
-          input.codexRunId ?? null,
-          input.codexRunId ?? null,
-          input.claudeRunId ?? null,
-          input.claudeRunId ?? null,
-        );
-      if (linked === undefined)
+        .get(input.boardId, input.sessionId, input.canonicalClaimId);
+      if (claim === undefined)
+        throw new Error("Verdict claim and board must belong to its session");
+      if (
+        input.roundId === undefined &&
+        (input.codexRunId !== undefined || input.claudeRunId !== undefined)
+      )
+        throw new Error("Referenced verdict runs require an exact final round");
+      if (input.roundId !== undefined) {
+        const round = this.database
+          .prepare(
+            "SELECT 1 FROM debate_rounds WHERE id=? AND session_id=? AND phase='final' AND status IN ('completed','partial') AND output_board_id=? AND finished_at IS NOT NULL",
+          )
+          .get(input.roundId, input.sessionId, input.boardId);
+        if (round === undefined)
+          throw new Error(
+            "Verdict requires a finalized final round with a matching output board",
+          );
+      }
+      const stanceFor = (
+        runId: string | undefined,
+        agentId: "codex" | "claude",
+      ): StanceValue | undefined => {
+        if (runId === undefined) return undefined;
+        const run = this.sessions.getAgentRun(runId);
+        if (
+          run.sessionId !== input.sessionId ||
+          run.roundId !== input.roundId ||
+          run.agentId !== agentId ||
+          run.phase !== "final" ||
+          run.status === "running" ||
+          run.outputBoardId !== input.boardId ||
+          run.finishedAt === undefined
+        )
+          throw new Error(
+            "Verdict run is not a compatible terminal final-round producer",
+          );
+        if (run.status !== "completed") return undefined;
+        if (run.response === undefined)
+          throw new Error(
+            "Completed verdict run is missing its final response",
+          );
+        const stance = this.database
+          .prepare(
+            `SELECT fs.stance FROM final_positions fp JOIN final_stances fs ON fs.final_position_id=fp.id AND fs.board_id=fp.board_id WHERE fp.session_id=? AND fp.board_id=? AND fp.round_id=? AND fp.agent_run_id=? AND fp.agent_id=? AND fs.canonical_claim_id=?`,
+          )
+          .get(
+            input.sessionId,
+            input.boardId,
+            input.roundId,
+            runId,
+            agentId,
+            input.canonicalClaimId,
+          ) as { stance: StanceValue } | undefined;
+        if (stance === undefined)
+          throw new Error(
+            "Successful verdict run requires a persisted final position and stance",
+          );
+        return stance.stance;
+      };
+      const codexStance = stanceFor(input.codexRunId, "codex");
+      const claudeStance = stanceFor(input.claudeRunId, "claude");
+      let expected: VerdictClassification = "UNRESOLVED";
+      if (
+        codexStance !== undefined &&
+        claudeStance !== undefined &&
+        codexStance !== "UNCERTAIN" &&
+        claudeStance !== "UNCERTAIN"
+      ) {
+        if (codexStance === "ACCEPT" && claudeStance === "ACCEPT")
+          expected = "CONSENSUS";
+        else if (codexStance === "DISPUTE" && claudeStance === "DISPUTE")
+          expected = "REJECTED";
+        else expected = "DISAGREEMENT";
+      }
+      if (input.classification !== expected)
         throw new Error(
-          "Verdict links must share a session and provider identities",
+          `Verdict classification is inconsistent with final stances; expected ${expected}`,
         );
       const id = input.id ?? randomUUID();
       const json = canonicalJson(input.verdict);
-      const contentHash = hash(verdictSemantic(input));
       const createdAt = input.createdAt ?? new Date().toISOString();
+      const contentHash = hash(verdictSemantic({ ...input, id, createdAt }));
       this.database
         .prepare(
           "INSERT INTO verdicts (id, session_id, board_id, canonical_claim_id, round_id, codex_run_id, claude_run_id, classification, evidence_support, verdict_json, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -966,6 +1044,8 @@ export class DeliberationRepository {
       if (
         hash(
           finalPositionSemantic({
+            id: r.id,
+            createdAt: r.created_at,
             sessionId: r.session_id,
             boardId: r.board_id,
             roundId: r.round_id,
@@ -1019,6 +1099,8 @@ export class DeliberationRepository {
       if (
         hash(
           verdictSemantic({
+            id: r.id,
+            createdAt: r.created_at,
             sessionId: r.session_id,
             boardId: r.board_id,
             canonicalClaimId: r.canonical_claim_id,

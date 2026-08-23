@@ -76,6 +76,23 @@ function setupImmutableAudit() {
     response: { phase: "final" },
     diagnostics: {},
   });
+  sessions.createAgentRun({
+    id: "claude-run-1",
+    sessionId: session.id,
+    agentId: "claude",
+    roundId: round.id,
+    phase: "final",
+    purpose: "position",
+    inputBoardId: board.id,
+    modelExecution: { observedModelIds: [], verification: "unverified" },
+    request: { phase: "final" },
+  });
+  sessions.finishAgentRun({
+    id: "claude-run-1",
+    status: "completed",
+    response: { phase: "final" },
+    diagnostics: {},
+  });
   deliberations.finishRound(round.id, "completed", board.id);
   const position = deliberations.addFinalPosition({
     sessionId: session.id,
@@ -86,12 +103,22 @@ function setupImmutableAudit() {
     position: { summary: "yes" },
     stances: [{ canonicalClaimId: "claim-1", stance: "ACCEPT" }],
   });
+  deliberations.addFinalPosition({
+    sessionId: session.id,
+    boardId: board.id,
+    roundId: round.id,
+    agentRunId: "claude-run-1",
+    agentId: "claude",
+    position: { summary: "yes" },
+    stances: [{ canonicalClaimId: "claim-1", stance: "ACCEPT" }],
+  });
   const verdict = deliberations.addVerdict({
     sessionId: session.id,
     boardId: board.id,
     canonicalClaimId: "claim-1",
     roundId: round.id,
     codexRunId: "run-1",
+    claudeRunId: "claude-run-1",
     classification: "CONSENSUS",
     evidenceSupport: "SUPPORTED",
     verdict: { report: "yes" },
@@ -236,11 +263,39 @@ describe("deliberation persistence", () => {
       canonicalEvidenceId: "evidence-0001",
     });
     deliberations.finishRound(round.id, "completed", output.id);
+    const finalRound = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 2,
+      phase: "final",
+      status: "running",
+      inputBoardId: output.id,
+    });
+    sessions.createAgentRun({
+      id: "final-codex",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: finalRound.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: output.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    sessions.finishAgentRun({
+      id: "final-codex",
+      status: "completed",
+      response: {
+        phase: "final",
+        stances: [{ claimId: "claim-0001", stance: "ACCEPT" }],
+      },
+      diagnostics: {},
+    });
+    deliberations.finishRound(finalRound.id, "completed", output.id);
     deliberations.addFinalPosition({
       sessionId: session.id,
       boardId: output.id,
-      roundId: round.id,
-      agentRunId: "run-codex",
+      roundId: finalRound.id,
+      agentRunId: "final-codex",
       agentId: "codex",
       position: { summary: "yes" },
       stances: [{ canonicalClaimId: "claim-0001", stance: "ACCEPT" }],
@@ -249,8 +304,8 @@ describe("deliberation persistence", () => {
       sessionId: session.id,
       boardId: output.id,
       canonicalClaimId: "claim-0001",
-      roundId: round.id,
-      codexRunId: "run-codex",
+      roundId: finalRound.id,
+      codexRunId: "final-codex",
       classification: "UNRESOLVED",
       evidenceSupport: "SUPPORTED",
       verdict: { report: "immutable" },
@@ -682,16 +737,16 @@ describe("deliberation persistence", () => {
       response: { phase: "initial" },
       diagnostics: {},
     });
-    database
-      .prepare("UPDATE agent_runs SET output_board_id=? WHERE id=?")
-      .run(firstOutput.id, "run");
     expect(() => {
-      deliberations.finishRound(round.id, "completed", secondOutput.id);
+      database
+        .prepare("UPDATE agent_runs SET output_board_id=? WHERE id=?")
+        .run(firstOutput.id, "run");
     }).toThrow(/output|round/i);
     expect(deliberations.load(session.id).rounds[0]).toMatchObject({
       status: "running",
     });
-    expect(sessions.getAgentRun("run").outputBoardId).toBe(firstOutput.id);
+    expect(sessions.getAgentRun("run").outputBoardId).toBeUndefined();
+    expect(secondOutput.id).not.toBe(firstOutput.id);
     database.close();
   });
 
@@ -748,7 +803,7 @@ describe("deliberation persistence", () => {
       canonicalClaimId: "claim-1",
       roundId: round.id,
       codexRunId: "codex",
-      classification: "CONSENSUS",
+      classification: "UNRESOLVED",
       evidenceSupport: "SUPPORTED",
       verdict: { report: "yes" },
     });
@@ -777,7 +832,7 @@ describe("deliberation persistence", () => {
     ],
     [
       "position agent",
-      "UPDATE final_positions SET agent_id='claude' WHERE id=?",
+      "UPDATE final_positions SET agent_id='other' WHERE id=?",
     ],
     [
       "position board link",
@@ -794,6 +849,10 @@ describe("deliberation persistence", () => {
     [
       "position JSON",
       "UPDATE final_positions SET position_json='{}' WHERE id=?",
+    ],
+    [
+      "position timestamp",
+      "UPDATE final_positions SET created_at='tampered' WHERE id=?",
     ],
   ])("detects %s tampering", (_label, sql) => {
     const { database, session, deliberations, position } =
@@ -819,9 +878,28 @@ describe("deliberation persistence", () => {
     ["round link", "UPDATE verdicts SET round_id=NULL WHERE id=?"],
     ["run link", "UPDATE verdicts SET codex_run_id=NULL WHERE id=?"],
     ["JSON", "UPDATE verdicts SET verdict_json='{}' WHERE id=?"],
+    ["ID", "UPDATE verdicts SET id='tampered-verdict' WHERE id=?"],
+    ["timestamp", "UPDATE verdicts SET created_at='tampered' WHERE id=?"],
   ])("detects verdict %s tampering", (_label, sql) => {
     const { database, session, deliberations, verdict } = setupImmutableAudit();
     database.prepare(sql).run(verdict.id);
+    expect(() => deliberations.load(session.id)).toThrow(/corrupt|hash/i);
+    database.close();
+  });
+
+  test("detects final-position identity tampering", () => {
+    const { database, session, deliberations, position } =
+      setupImmutableAudit();
+    database.pragma("foreign_keys = OFF");
+    database
+      .prepare("UPDATE final_positions SET id=? WHERE id=?")
+      .run("tampered-position", position.id);
+    database
+      .prepare(
+        "UPDATE final_stances SET final_position_id=? WHERE final_position_id=?",
+      )
+      .run("tampered-position", position.id);
+    database.pragma("foreign_keys = ON");
     expect(() => deliberations.load(session.id)).toThrow(/corrupt|hash/i);
     database.close();
   });
@@ -989,6 +1067,13 @@ describe("deliberation persistence", () => {
       modelExecution: { observedModelIds: [], verification: "unverified" },
       request: { phase: "final" },
     });
+    sessions.finishAgentRun({
+      id: "run",
+      status: "completed",
+      response: { phase: "final" },
+      diagnostics: {},
+    });
+    deliberations.finishRound(round.id, "completed", board.id);
     expect(() => {
       deliberations.addFinalPosition({
         sessionId: session.id,
@@ -1005,6 +1090,557 @@ describe("deliberation persistence", () => {
     ).toEqual({ count: 0 });
     expect(
       database.prepare("SELECT COUNT(*) AS count FROM final_stances").get(),
+    ).toEqual({ count: 0 });
+    database.close();
+  });
+
+  test("requires response then finalized final round then final position", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [{ id: "claim" }] },
+    });
+    deliberations.addClaim({
+      boardId: board.id,
+      canonicalId: "claim",
+      normalizedText: "claim",
+      material: true,
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "final",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    sessions.createAgentRun({
+      id: "run",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: board.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    const position = {
+      sessionId: session.id,
+      boardId: board.id,
+      roundId: round.id,
+      agentRunId: "run",
+      agentId: "codex",
+      position: {},
+      stances: [{ canonicalClaimId: "claim", stance: "ACCEPT" as const }],
+    };
+    expect(() => {
+      deliberations.addFinalPosition(position);
+    }).toThrow(/final|completed|response|round/i);
+    sessions.finishAgentRun({
+      id: "run",
+      status: "completed",
+      response: { phase: "final" },
+      diagnostics: {},
+    });
+    expect(() => {
+      deliberations.addFinalPosition(position);
+    }).toThrow(/final|output|round/i);
+    deliberations.finishRound(round.id, "completed", board.id);
+    expect(deliberations.addFinalPosition(position)).toMatchObject({
+      boardId: board.id,
+      roundId: round.id,
+      agentRunId: "run",
+    });
+    database.close();
+  });
+
+  test("rejects initial, failed, and mismatched final-position producers", () => {
+    for (const scenario of ["initial", "failed", "board", "agent"] as const) {
+      const { database, sessions, session, deliberations } = setup(scenario);
+      const board = deliberations.createClaimBoard({
+        sessionId: session.id,
+        version: 1,
+        payload: { claims: [{ id: "claim" }] },
+      });
+      const otherBoard = deliberations.createClaimBoard({
+        sessionId: session.id,
+        version: 2,
+        payload: { claims: [{ id: "claim" }] },
+      });
+      deliberations.addClaim({
+        boardId: board.id,
+        canonicalId: "claim",
+        normalizedText: "claim",
+        material: true,
+      });
+      deliberations.addClaim({
+        boardId: otherBoard.id,
+        canonicalId: "claim",
+        normalizedText: "claim",
+        material: true,
+      });
+      const phase = scenario === "initial" ? "initial" : "final";
+      const round = deliberations.createRound({
+        sessionId: session.id,
+        roundNumber: 1,
+        phase,
+        status: "running",
+        inputBoardId: board.id,
+      });
+      sessions.createAgentRun({
+        id: "run",
+        sessionId: session.id,
+        agentId: "codex",
+        roundId: round.id,
+        phase,
+        purpose: "position",
+        inputBoardId: board.id,
+        modelExecution: { observedModelIds: [], verification: "unverified" },
+        request: { phase },
+      });
+      sessions.finishAgentRun({
+        id: "run",
+        status: scenario === "failed" ? "failed" : "completed",
+        ...(scenario === "failed" ? {} : { response: { phase } }),
+        diagnostics: {},
+      });
+      deliberations.finishRound(
+        round.id,
+        scenario === "failed" ? "partial" : "completed",
+        board.id,
+      );
+      expect(() => {
+        deliberations.addFinalPosition({
+          sessionId: session.id,
+          boardId: scenario === "board" ? otherBoard.id : board.id,
+          roundId: round.id,
+          agentRunId: "run",
+          agentId: scenario === "agent" ? "claude" : "codex",
+          position: {},
+          stances: [{ canonicalClaimId: "claim", stance: "ACCEPT" }],
+        });
+      }).toThrow(/final|run|agent|board|completed/i);
+      expect(
+        database.prepare("SELECT COUNT(*) AS count FROM final_positions").get(),
+      ).toEqual({ count: 0 });
+      database.close();
+    }
+  });
+
+  test("requires lifecycle-valid final runs and deterministic stance classification before verdict", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [{ id: "claim" }] },
+    });
+    deliberations.addClaim({
+      boardId: board.id,
+      canonicalId: "claim",
+      normalizedText: "claim",
+      material: true,
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "final",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    for (const agentId of ["codex", "claude"] as const) {
+      sessions.createAgentRun({
+        id: agentId,
+        sessionId: session.id,
+        agentId,
+        roundId: round.id,
+        phase: "final",
+        purpose: "position",
+        inputBoardId: board.id,
+        modelExecution: { observedModelIds: [], verification: "unverified" },
+        request: { phase: "final" },
+      });
+      sessions.finishAgentRun({
+        id: agentId,
+        status: "completed",
+        response: { phase: "final" },
+        diagnostics: {},
+      });
+    }
+    const verdict = {
+      sessionId: session.id,
+      boardId: board.id,
+      canonicalClaimId: "claim",
+      roundId: round.id,
+      codexRunId: "codex",
+      claudeRunId: "claude",
+      classification: "CONSENSUS" as const,
+      evidenceSupport: "SUPPORTED",
+      verdict: {},
+    };
+    expect(() => {
+      deliberations.addVerdict(verdict);
+    }).toThrow(/final|round|output/i);
+    deliberations.finishRound(round.id, "completed", board.id);
+    expect(() => {
+      deliberations.addVerdict(verdict);
+    }).toThrow(/position|stance/i);
+    for (const agentId of ["codex", "claude"] as const) {
+      deliberations.addFinalPosition({
+        sessionId: session.id,
+        boardId: board.id,
+        roundId: round.id,
+        agentRunId: agentId,
+        agentId,
+        position: {},
+        stances: [
+          {
+            canonicalClaimId: "claim",
+            stance: agentId === "codex" ? "ACCEPT" : "DISPUTE",
+          },
+        ],
+      });
+    }
+    expect(() => {
+      deliberations.addVerdict(verdict);
+    }).toThrow(/classification|stance/i);
+    expect(
+      deliberations.addVerdict({ ...verdict, classification: "DISAGREEMENT" }),
+    ).toMatchObject({ classification: "DISAGREEMENT" });
+    database.close();
+  });
+
+  test("rejects initial verdict producers but permits failed final producers only as unresolved", () => {
+    for (const phase of ["initial", "final"] as const) {
+      const { database, sessions, session, deliberations } = setup(
+        `verdict-${phase}`,
+      );
+      const board = deliberations.createClaimBoard({
+        sessionId: session.id,
+        version: 1,
+        payload: { claims: [{ id: "claim" }] },
+      });
+      deliberations.addClaim({
+        boardId: board.id,
+        canonicalId: "claim",
+        normalizedText: "claim",
+        material: true,
+      });
+      const round = deliberations.createRound({
+        sessionId: session.id,
+        roundNumber: 1,
+        phase,
+        status: "running",
+        inputBoardId: board.id,
+      });
+      sessions.createAgentRun({
+        id: "run",
+        sessionId: session.id,
+        agentId: "codex",
+        roundId: round.id,
+        phase,
+        purpose: "position",
+        inputBoardId: board.id,
+        modelExecution: { observedModelIds: [], verification: "unverified" },
+        request: { phase },
+      });
+      sessions.finishAgentRun({
+        id: "run",
+        status: phase === "final" ? "failed" : "completed",
+        ...(phase === "initial" ? { response: { phase } } : {}),
+        diagnostics: {},
+      });
+      deliberations.finishRound(
+        round.id,
+        phase === "final" ? "partial" : "completed",
+        board.id,
+      );
+      const verdict = {
+        sessionId: session.id,
+        boardId: board.id,
+        canonicalClaimId: "claim",
+        roundId: round.id,
+        codexRunId: "run",
+        classification: "UNRESOLVED" as const,
+        evidenceSupport: "UNSUPPORTED",
+        verdict: {},
+      };
+      if (phase === "initial")
+        expect(() => {
+          deliberations.addVerdict(verdict);
+        }).toThrow(/final|round/i);
+      else
+        expect(deliberations.addVerdict(verdict)).toMatchObject({
+          classification: "UNRESOLVED",
+        });
+      database.close();
+    }
+  });
+
+  test("SQLite triggers reject null-input round tuple divergence", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "initial",
+      status: "running",
+    });
+    const raw = database.prepare(
+      "INSERT INTO agent_runs (id,session_id,agent_id,observed_model_ids_json,model_verification,round_id,phase,purpose,input_board_id,request_json,status,duration_ms,diagnostics_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
+    expect(() => {
+      raw.run(
+        "phase",
+        session.id,
+        "codex",
+        "[]",
+        "unverified",
+        round.id,
+        "final",
+        "draft",
+        null,
+        '{"phase":"final"}',
+        "running",
+        0,
+        "{}",
+        "now",
+      );
+    }).toThrow();
+    const other = sessions.create({
+      interactionId: "null-other",
+      command: "debate",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    expect(() => {
+      raw.run(
+        "session",
+        other.id,
+        "codex",
+        "[]",
+        "unverified",
+        round.id,
+        "initial",
+        "draft",
+        null,
+        '{"phase":"initial"}',
+        "running",
+        0,
+        "{}",
+        "now",
+      );
+    }).toThrow();
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM agent_runs").get(),
+    ).toEqual({ count: 0 });
+    database.close();
+  });
+
+  test("SQLite triggers prevent post-finalization output divergence", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [] },
+    });
+    const other = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 2,
+      payload: { claims: [] },
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "final",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    sessions.createAgentRun({
+      id: "run",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: board.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    sessions.finishAgentRun({
+      id: "run",
+      status: "completed",
+      response: { phase: "final" },
+      diagnostics: {},
+    });
+    deliberations.finishRound(round.id, "completed", board.id);
+    expect(() => {
+      database
+        .prepare("UPDATE debate_rounds SET output_board_id=? WHERE id=?")
+        .run(other.id, round.id);
+    }).toThrow(/output|round/i);
+    expect(deliberations.load(session.id).rounds[0]?.outputBoardId).toBe(
+      board.id,
+    );
+    database.close();
+  });
+
+  test("database rejects cross-session evidence origin even when every referenced row is valid", () => {
+    const first = setup("raw-origin-a");
+    const sessions = new SessionRepository(first.database);
+    const second = sessions.create({
+      interactionId: "raw-origin-b",
+      command: "debate",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    const board = first.deliberations.createClaimBoard({
+      sessionId: first.session.id,
+      version: 1,
+      payload: { claims: [] },
+    });
+    first.deliberations.addEvidenceReference({
+      boardId: board.id,
+      sessionId: first.session.id,
+      canonicalId: "e",
+      trackedPath: "x",
+      resolution: "MISSING",
+    });
+    sessions.createAgentRun({
+      id: "other-run",
+      sessionId: second.id,
+      agentId: "codex",
+      phase: "initial",
+      purpose: "draft",
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "initial" },
+    });
+    expect(() => {
+      first.database
+        .prepare(
+          "INSERT INTO evidence_origins (id,board_id,session_id,canonical_evidence_id,agent_id,agent_run_id,provider_local_id) VALUES (?,?,?,?,?,?,?)",
+        )
+        .run(
+          "origin",
+          board.id,
+          first.session.id,
+          "e",
+          "codex",
+          "other-run",
+          "local",
+        );
+    }).toThrow();
+    expect(
+      first.database
+        .prepare("SELECT COUNT(*) AS count FROM evidence_origins")
+        .get(),
+    ).toEqual({ count: 0 });
+    first.database.close();
+  });
+
+  test("round completion rolls back when linked-run update aborts after parent update", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [] },
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "final",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    sessions.createAgentRun({
+      id: "run",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: board.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    sessions.finishAgentRun({
+      id: "run",
+      status: "completed",
+      response: { phase: "final" },
+      diagnostics: {},
+    });
+    database.exec(
+      "CREATE TEMP TRIGGER abort_run_output BEFORE UPDATE OF output_board_id ON agent_runs BEGIN SELECT RAISE(ABORT, 'forced run update failure'); END",
+    );
+    expect(() => {
+      deliberations.finishRound(round.id, "completed", board.id);
+    }).toThrow(/forced/i);
+    const persistedRound = deliberations.load(session.id).rounds[0];
+    expect(persistedRound?.status).toBe("running");
+    expect(persistedRound?.outputBoardId).toBeUndefined();
+    expect(sessions.getAgentRun("run").outputBoardId).toBeUndefined();
+    database.close();
+  });
+
+  test("final-position parent rolls back when child insert aborts", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [{ id: "claim" }] },
+    });
+    deliberations.addClaim({
+      boardId: board.id,
+      canonicalId: "claim",
+      normalizedText: "claim",
+      material: true,
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "final",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    sessions.createAgentRun({
+      id: "run",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: board.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    sessions.finishAgentRun({
+      id: "run",
+      status: "completed",
+      response: { phase: "final" },
+      diagnostics: {},
+    });
+    deliberations.finishRound(round.id, "completed", board.id);
+    database.exec(
+      "CREATE TEMP TRIGGER abort_final_stance BEFORE INSERT ON final_stances BEGIN SELECT RAISE(ABORT, 'forced stance failure'); END",
+    );
+    expect(() => {
+      deliberations.addFinalPosition({
+        sessionId: session.id,
+        boardId: board.id,
+        roundId: round.id,
+        agentRunId: "run",
+        agentId: "codex",
+        position: {},
+        stances: [{ canonicalClaimId: "claim", stance: "ACCEPT" }],
+      });
+    }).toThrow(/forced/i);
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM final_positions").get(),
     ).toEqual({ count: 0 });
     database.close();
   });
