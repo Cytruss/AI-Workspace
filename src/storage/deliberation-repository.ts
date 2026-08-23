@@ -4,6 +4,7 @@ import {
   canonicalJson,
   type AgentRunRecord,
   SessionRepository,
+  StorageCorruptionError,
 } from "./session-repository.js";
 
 export type DebateRoundStatus =
@@ -188,6 +189,73 @@ const CLASSIFICATIONS = new Set<VerdictClassification>([
 ]);
 const hash = (json: string): string =>
   createHash("sha256").update(json, "utf8").digest("hex");
+function parseImmutableJson(json: string, label: string): unknown {
+  try {
+    return JSON.parse(json) as unknown;
+  } catch (error: unknown) {
+    throw new StorageCorruptionError(`${label} contains malformed JSON`, {
+      cause: error,
+    });
+  }
+}
+function finalPositionSemantic(input: {
+  sessionId: string;
+  boardId: string;
+  roundId: string;
+  agentRunId: string;
+  agentId: string;
+  position: unknown;
+  stances: readonly {
+    boardId?: string;
+    canonicalClaimId: string;
+    stance: StanceValue;
+  }[];
+}): string {
+  return canonicalJson({
+    sessionId: input.sessionId,
+    boardId: input.boardId,
+    roundId: input.roundId,
+    agentRunId: input.agentRunId,
+    agentId: input.agentId,
+    position: input.position,
+    stances: [...input.stances]
+      .map((stance) => ({
+        boardId: stance.boardId ?? input.boardId,
+        canonicalClaimId: stance.canonicalClaimId,
+        stance: stance.stance,
+      }))
+      .sort((a, b) =>
+        a.canonicalClaimId < b.canonicalClaimId
+          ? -1
+          : a.canonicalClaimId > b.canonicalClaimId
+            ? 1
+            : 0,
+      ),
+  });
+}
+function verdictSemantic(input: {
+  sessionId: string;
+  boardId: string;
+  canonicalClaimId: string;
+  roundId?: string;
+  codexRunId?: string;
+  claudeRunId?: string;
+  classification: VerdictClassification;
+  evidenceSupport: string;
+  verdict: unknown;
+}): string {
+  return canonicalJson({
+    sessionId: input.sessionId,
+    boardId: input.boardId,
+    canonicalClaimId: input.canonicalClaimId,
+    roundId: input.roundId ?? null,
+    codexRunId: input.codexRunId ?? null,
+    claudeRunId: input.claudeRunId ?? null,
+    classification: input.classification,
+    evidenceSupport: input.evidenceSupport,
+    verdict: input.verdict,
+  });
+}
 interface BoardRow {
   id: string;
   session_id: string;
@@ -222,7 +290,7 @@ function boardFromRow(row: BoardRow): ClaimBoardRecord {
     id: row.id,
     sessionId: row.session_id,
     version: row.version,
-    payload: JSON.parse(row.payload_json) as unknown,
+    payload: parseImmutableJson(row.payload_json, `Claim board ${row.id}`),
     contentHash: row.content_hash,
     byteLength: row.byte_length,
     createdAt: row.created_at,
@@ -258,6 +326,10 @@ export class DeliberationRepository {
   }
 
   createRound(input: CreateDebateRoundInput): DebateRoundRecord {
+    if (input.status !== "running")
+      throw new Error("Debate rounds must be created in running status");
+    if (!["initial", "cross_examination", "final"].includes(input.phase))
+      throw new Error("Invalid debate-round phase");
     const id = input.id ?? randomUUID();
     const createdAt = input.createdAt ?? new Date().toISOString();
     this.database
@@ -287,9 +359,43 @@ export class DeliberationRepository {
     status: DebateRoundStatus,
     outputBoardId?: string,
   ): void {
-    if (status === "running")
-      throw new Error("A finished round cannot remain running");
+    if (
+      !new Set<DebateRoundStatus>([
+        "completed",
+        "partial",
+        "failed",
+        "cancelled",
+      ]).has(status)
+    )
+      throw new Error("Debate-round finish status must be terminal");
     this.database.transaction(() => {
+      const round = this.database
+        .prepare(
+          "SELECT session_id, phase, input_board_id, status FROM debate_rounds WHERE id=?",
+        )
+        .get(id) as
+        | {
+            session_id: string;
+            phase: string;
+            input_board_id: string | null;
+            status: DebateRoundStatus;
+          }
+        | undefined;
+      if (round === undefined || round.status !== "running")
+        throw new Error("Invalid debate-round transition");
+      const incompatible = this.database
+        .prepare(
+          "SELECT 1 FROM agent_runs WHERE round_id=? AND (status='running' OR session_id<>? OR phase<>? OR input_board_id IS NOT ? OR (output_board_id IS NOT NULL AND output_board_id IS NOT ?)) LIMIT 1",
+        )
+        .get(
+          id,
+          round.session_id,
+          round.phase,
+          round.input_board_id,
+          outputBoardId ?? null,
+        );
+      if (incompatible !== undefined)
+        throw new Error("Agent-run input or output diverges from its round");
       const result = this.database
         .prepare(
           "UPDATE debate_rounds SET status = ?, output_board_id = ?, finished_at = ? WHERE id = ? AND status = 'running'",
@@ -503,9 +609,15 @@ export class DeliberationRepository {
         throw new Error(
           "Final position links must share a session, round, board, and agent",
         );
+      const ids = new Set<string>();
+      for (const stance of input.stances) {
+        if (!STANCES.has(stance.stance) || ids.has(stance.canonicalClaimId))
+          throw new Error("Invalid or duplicate final stance");
+        ids.add(stance.canonicalClaimId);
+      }
       const id = input.id ?? randomUUID();
       const json = canonicalJson(input.position);
-      const contentHash = hash(json);
+      const contentHash = hash(finalPositionSemantic(input));
       const createdAt = input.createdAt ?? new Date().toISOString();
       this.database
         .prepare(
@@ -525,11 +637,7 @@ export class DeliberationRepository {
       const statement = this.database.prepare(
         "INSERT INTO final_stances (final_position_id, board_id, canonical_claim_id, stance) VALUES (?, ?, ?, ?)",
       );
-      const ids = new Set<string>();
       for (const stance of input.stances) {
-        if (!STANCES.has(stance.stance) || ids.has(stance.canonicalClaimId))
-          throw new Error("Invalid or duplicate final stance");
-        ids.add(stance.canonicalClaimId);
         statement.run(
           id,
           input.boardId,
@@ -543,6 +651,8 @@ export class DeliberationRepository {
   addVerdict(input: AddVerdictInput): VerdictRecord {
     if (!CLASSIFICATIONS.has(input.classification))
       throw new Error("Invalid verdict classification");
+    if (!new Set(["SUPPORTED", "UNSUPPORTED"]).has(input.evidenceSupport))
+      throw new Error("Invalid verdict evidence support");
     return this.database.transaction(() => {
       const linked = this.database
         .prepare(
@@ -569,7 +679,7 @@ export class DeliberationRepository {
         );
       const id = input.id ?? randomUUID();
       const json = canonicalJson(input.verdict);
-      const contentHash = hash(json);
+      const contentHash = hash(verdictSemantic(input));
       const createdAt = input.createdAt ?? new Date().toISOString();
       this.database
         .prepare(
@@ -593,8 +703,38 @@ export class DeliberationRepository {
     })();
   }
 
+  private assertPersistedRunRound(run: AgentRunRecord): void {
+    if (run.roundId === undefined) return;
+    const round = this.database
+      .prepare(
+        "SELECT session_id, phase, input_board_id, output_board_id, status FROM debate_rounds WHERE id=?",
+      )
+      .get(run.roundId) as
+      | {
+          session_id: string;
+          phase: string;
+          input_board_id: string | null;
+          output_board_id: string | null;
+          status: DebateRoundStatus;
+        }
+      | undefined;
+    const inputBoardId = run.inputBoardId ?? null;
+    const outputBoardId = run.outputBoardId ?? null;
+    if (
+      round === undefined ||
+      round.session_id !== run.sessionId ||
+      round.phase !== run.phase ||
+      round.input_board_id !== inputBoardId ||
+      (round.status !== "running" && round.output_board_id !== outputBoardId)
+    )
+      throw new StorageCorruptionError(
+        `Agent run ${run.id} diverges from its debate round`,
+      );
+  }
+
   reconstructAgentCall(runId: string): ReconstructedAgentCall {
     const run = this.sessions.getAgentRun(runId);
+    this.assertPersistedRunRound(run);
     return Object.freeze({
       ...run,
       ...(run.inputBoardId === undefined
@@ -628,6 +768,7 @@ export class DeliberationRepository {
         )
         .all(sessionId) as { id: string }[]
     ).map(({ id }) => this.sessions.getAgentRun(id));
+    for (const run of runs) this.assertPersistedRunRound(run);
     const claims = (
       this.database
         .prepare(
@@ -804,13 +945,40 @@ export class DeliberationRepository {
         created_at: string;
       }[]
     ).map((r) => {
-      if (hash(r.position_json) !== r.content_hash)
-        throw new Error(`Final position ${r.id} content hash mismatch`);
       const finalStances = this.database
         .prepare(
-          "SELECT canonical_claim_id, stance FROM final_stances WHERE final_position_id=? ORDER BY canonical_claim_id",
+          "SELECT board_id, canonical_claim_id, stance FROM final_stances WHERE final_position_id=? ORDER BY canonical_claim_id",
         )
-        .all(r.id) as { canonical_claim_id: string; stance: StanceValue }[];
+        .all(r.id) as {
+        board_id: string;
+        canonical_claim_id: string;
+        stance: StanceValue;
+      }[];
+      const position = parseImmutableJson(
+        r.position_json,
+        `Final position ${r.id}`,
+      );
+      const stances = finalStances.map((s) => ({
+        boardId: s.board_id,
+        canonicalClaimId: s.canonical_claim_id,
+        stance: s.stance,
+      }));
+      if (
+        hash(
+          finalPositionSemantic({
+            sessionId: r.session_id,
+            boardId: r.board_id,
+            roundId: r.round_id,
+            agentRunId: r.agent_run_id,
+            agentId: r.agent_id,
+            position,
+            stances,
+          }),
+        ) !== r.content_hash
+      )
+        throw new StorageCorruptionError(
+          `Final position ${r.id} content hash mismatch`,
+        );
       return Object.freeze({
         id: r.id,
         sessionId: r.session_id,
@@ -818,10 +986,10 @@ export class DeliberationRepository {
         roundId: r.round_id,
         agentRunId: r.agent_run_id,
         agentId: r.agent_id,
-        position: JSON.parse(r.position_json) as unknown,
-        stances: finalStances.map((s) => ({
-          canonicalClaimId: s.canonical_claim_id,
-          stance: s.stance,
+        position,
+        stances: stances.map(({ canonicalClaimId, stance }) => ({
+          canonicalClaimId,
+          stance,
         })),
         contentHash: r.content_hash,
         createdAt: r.created_at,
@@ -847,8 +1015,27 @@ export class DeliberationRepository {
         created_at: string;
       }[]
     ).map((r) => {
-      if (hash(r.verdict_json) !== r.content_hash)
-        throw new Error(`Verdict ${r.id} content hash mismatch`);
+      const verdict = parseImmutableJson(r.verdict_json, `Verdict ${r.id}`);
+      if (
+        hash(
+          verdictSemantic({
+            sessionId: r.session_id,
+            boardId: r.board_id,
+            canonicalClaimId: r.canonical_claim_id,
+            ...(r.round_id === null ? {} : { roundId: r.round_id }),
+            ...(r.codex_run_id === null ? {} : { codexRunId: r.codex_run_id }),
+            ...(r.claude_run_id === null
+              ? {}
+              : { claudeRunId: r.claude_run_id }),
+            classification: r.classification,
+            evidenceSupport: r.evidence_support,
+            verdict,
+          }),
+        ) !== r.content_hash
+      )
+        throw new StorageCorruptionError(
+          `Verdict ${r.id} content hash mismatch`,
+        );
       return Object.freeze({
         id: r.id,
         sessionId: r.session_id,
@@ -859,7 +1046,7 @@ export class DeliberationRepository {
         ...(r.claude_run_id === null ? {} : { claudeRunId: r.claude_run_id }),
         classification: r.classification,
         evidenceSupport: r.evidence_support,
-        verdict: JSON.parse(r.verdict_json) as unknown,
+        verdict,
         contentHash: r.content_hash,
         createdAt: r.created_at,
       });

@@ -107,21 +107,19 @@ const ObservedIdsSchema = z
         code: "custom",
         message: "Observed model IDs must be unique",
       });
-    if (
-      ids.some(
-        (id, index) => index > 0 && id.localeCompare(ids[index - 1] ?? "") < 0,
-      )
-    )
+    if (ids.some((id, index) => index > 0 && id < (ids[index - 1] ?? "")))
       context.addIssue({
         code: "custom",
         message: "Observed model IDs must be sorted",
       });
   });
 
-function ownObject(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Expected a JSON object");
-  return value as Record<string, unknown>;
+export class StorageCorruptionError extends Error {
+  readonly code = "STORAGE_CORRUPTION";
+  constructor(message: string, options?: ErrorOptions) {
+    super(`Storage corruption: ${message}`, options);
+    this.name = "StorageCorruptionError";
+  }
 }
 
 export function canonicalJson(value: unknown): string {
@@ -157,6 +155,56 @@ function boundedJson(
   if (Buffer.byteLength(json, "utf8") > maxBytes)
     throw new Error(`${label} exceeds ${String(maxBytes)} bytes`);
   return json;
+}
+
+function providerEnvelopeJson(
+  value: unknown,
+  expectedPhase: string,
+  label: "Agent request" | "Agent response",
+): string {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null)
+  )
+    throw new Error(`${label} must be a plain JSON object`);
+  const phase = (value as Record<string, unknown>).phase;
+  if (
+    typeof phase !== "string" ||
+    phase.length < 1 ||
+    Buffer.byteLength(phase, "utf8") > 64 ||
+    phase !== expectedPhase
+  )
+    throw new Error(`${label} phase must exactly match run phase`);
+  return boundedJson(value, label);
+}
+
+function parseStoredJson(json: string, label: string): unknown {
+  try {
+    return JSON.parse(json) as unknown;
+  } catch (error: unknown) {
+    throw new StorageCorruptionError(`${label} contains malformed JSON`, {
+      cause: error,
+    });
+  }
+}
+
+function parseStoredEnvelope(
+  json: string,
+  expectedPhase: string,
+  label: "Agent request" | "Agent response",
+): Record<string, unknown> {
+  const value = parseStoredJson(json, label);
+  try {
+    providerEnvelopeJson(value, expectedPhase, label);
+    return value as Record<string, unknown>;
+  } catch (error: unknown) {
+    throw new StorageCorruptionError(`${label} violates its stored envelope`, {
+      cause: error,
+    });
+  }
 }
 
 function validateExecution(execution: ModelExecution): void {
@@ -227,7 +275,12 @@ function sessionFromRow(row: SessionRow): SessionRecord {
     question: row.question,
     ...(row.debate_config_json === null
       ? {}
-      : { debateConfig: JSON.parse(row.debate_config_json) as unknown }),
+      : {
+          debateConfig: parseStoredJson(
+            row.debate_config_json,
+            "Session debate config",
+          ),
+        }),
     status: row.status,
     createdAt: row.created_at,
     ...(row.started_at === null ? {} : { startedAt: row.started_at }),
@@ -318,6 +371,8 @@ export class SessionRepository {
     this.transition(id, ["queued", "running"], "cancelled");
   }
   addMessage(input: AddMessageInput): void {
+    if (!new Set(["user", "assistant", "system", "agent"]).has(input.role))
+      throw new Error("Invalid message role");
     this.database
       .prepare(
         "INSERT INTO messages (id, session_id, role, agent_id, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -362,56 +417,122 @@ export class SessionRepository {
 
   createAgentRun(input: CreateAgentRunInput): void {
     validateExecution(input.modelExecution);
-    this.database
-      .prepare(
-        `INSERT INTO agent_runs (id, session_id, agent_id, requested_model_class, requested_model_id, requested_effort, observed_model_ids_json, model_verification, round_id, phase, purpose, input_board_id, output_board_id, request_json, response_json, status, exit_code, duration_ms, diagnostics_json, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, NULL)`,
-      )
-      .run(
-        input.id ?? randomUUID(),
-        input.sessionId,
-        input.agentId,
-        input.modelExecution.requestedClass ?? null,
-        input.modelExecution.requestedCliModelId ?? null,
-        input.modelExecution.requestedEffort ?? null,
-        JSON.stringify(input.modelExecution.observedModelIds),
-        input.modelExecution.verification,
-        input.roundId ?? null,
+    if (
+      !new Set(["ask", "initial", "cross_examination", "final"]).has(
         input.phase,
-        input.purpose,
-        input.inputBoardId ?? null,
-        input.outputBoardId ?? null,
-        boundedJson(input.request, "Agent request"),
-        input.status ?? "running",
-        input.durationMs ?? 0,
-        boundedJson(input.diagnostics ?? {}, "Agent diagnostics", 262_144),
-        input.createdAt ?? new Date().toISOString(),
+      )
+    )
+      throw new Error("Invalid agent-run phase");
+    if (input.status !== undefined && input.status !== "running")
+      throw new Error("Agent runs must be created in running status");
+    if ((input.durationMs ?? 0) < 0)
+      throw new Error("Agent run duration must be nonnegative");
+    if (input.outputBoardId !== undefined)
+      throw new Error(
+        "Agent output boards may be linked only after response persistence",
       );
+    const requestJson = providerEnvelopeJson(
+      input.request,
+      input.phase,
+      "Agent request",
+    );
+    this.database.transaction(() => {
+      if (input.roundId !== undefined) {
+        const round = this.database
+          .prepare(
+            "SELECT 1 FROM debate_rounds WHERE id=? AND session_id=? AND phase=? AND input_board_id IS ? AND status='running'",
+          )
+          .get(
+            input.roundId,
+            input.sessionId,
+            input.phase,
+            input.inputBoardId ?? null,
+          );
+        if (round === undefined)
+          throw new Error(
+            "Agent run must match its running round phase and input board",
+          );
+      }
+      this.database
+        .prepare(
+          `INSERT INTO agent_runs (id, session_id, agent_id, requested_model_class, requested_model_id, requested_effort, observed_model_ids_json, model_verification, round_id, phase, purpose, input_board_id, output_board_id, request_json, response_json, status, exit_code, duration_ms, diagnostics_json, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'running', NULL, ?, ?, ?, NULL)`,
+        )
+        .run(
+          input.id ?? randomUUID(),
+          input.sessionId,
+          input.agentId,
+          input.modelExecution.requestedClass ?? null,
+          input.modelExecution.requestedCliModelId ?? null,
+          input.modelExecution.requestedEffort ?? null,
+          JSON.stringify(input.modelExecution.observedModelIds),
+          input.modelExecution.verification,
+          input.roundId ?? null,
+          input.phase,
+          input.purpose,
+          input.inputBoardId ?? null,
+          input.outputBoardId ?? null,
+          requestJson,
+          input.durationMs ?? 0,
+          boundedJson(input.diagnostics ?? {}, "Agent diagnostics", 262_144),
+          input.createdAt ?? new Date().toISOString(),
+        );
+    })();
   }
   finishAgentRun(input: FinishAgentRunInput): void {
-    const result = this.database
-      .prepare(
-        "UPDATE agent_runs SET response_json = ?, output_board_id = COALESCE(?, output_board_id), status = ?, exit_code = ?, duration_ms = COALESCE(?, duration_ms), diagnostics_json = ?, finished_at = ? WHERE id = ? AND status = 'running'",
-      )
-      .run(
+    if (!(["completed", "failed", "cancelled"] as const).includes(input.status))
+      throw new Error("Agent run finish status must be terminal");
+    if (input.durationMs !== undefined && input.durationMs < 0)
+      throw new Error("Agent run duration must be nonnegative");
+    if (input.outputBoardId !== undefined)
+      throw new Error(
+        "Agent output boards are linked when their round finishes",
+      );
+    this.database.transaction(() => {
+      const row = this.database
+        .prepare("SELECT phase, status FROM agent_runs WHERE id=?")
+        .get(input.id) as { phase: string; status: AgentRunStatus } | undefined;
+      if (row === undefined || row.status !== "running")
+        throw new Error("Invalid agent-run transition");
+      if (input.status === "completed" && input.response === undefined)
+        throw new Error("Completed agent runs require a response");
+      const responseJson =
         input.response === undefined
           ? null
-          : boundedJson(input.response, "Agent response"),
-        input.outputBoardId ?? null,
-        input.status,
-        input.exitCode ?? null,
-        input.durationMs ?? null,
-        boundedJson(input.diagnostics, "Agent diagnostics", 262_144),
-        new Date().toISOString(),
-        input.id,
-      );
-    if (result.changes !== 1) throw new Error("Invalid agent-run transition");
+          : providerEnvelopeJson(input.response, row.phase, "Agent response");
+      this.database
+        .prepare(
+          "UPDATE agent_runs SET response_json = ?, output_board_id = COALESCE(?, output_board_id), status = ?, exit_code = ?, duration_ms = COALESCE(?, duration_ms), diagnostics_json = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+        )
+        .run(
+          responseJson,
+          input.outputBoardId ?? null,
+          input.status,
+          input.exitCode ?? null,
+          input.durationMs ?? null,
+          boundedJson(input.diagnostics, "Agent diagnostics", 262_144),
+          new Date().toISOString(),
+          input.id,
+        );
+    })();
   }
   getAgentRun(id: string): AgentRunRecord {
     const row = this.database
       .prepare("SELECT * FROM agent_runs WHERE id = ?")
       .get(id) as RunRow | undefined;
     if (row === undefined) throw new Error(`Agent run not found: ${id}`);
-    const observed = JSON.parse(row.observed_model_ids_json) as unknown;
+    const observed = parseStoredJson(
+      row.observed_model_ids_json,
+      "Observed model IDs",
+    );
+    let observedModelIds: string[];
+    try {
+      observedModelIds = ObservedIdsSchema.parse(observed);
+    } catch (error: unknown) {
+      throw new StorageCorruptionError(
+        "Observed model IDs violate their stored schema",
+        { cause: error },
+      );
+    }
     const execution: ModelExecution = {
       ...(row.requested_model_class === null
         ? {}
@@ -422,10 +543,17 @@ export class SessionRepository {
               ? {}
               : { requestedEffort: row.requested_effort }),
           }),
-      observedModelIds: ObservedIdsSchema.parse(observed),
+      observedModelIds,
       verification: row.model_verification,
     };
-    validateExecution(execution);
+    try {
+      validateExecution(execution);
+    } catch (error: unknown) {
+      throw new StorageCorruptionError(
+        "Model execution violates its stored schema",
+        { cause: error },
+      );
+    }
     return Object.freeze({
       id: row.id,
       sessionId: row.session_id,
@@ -440,14 +568,24 @@ export class SessionRepository {
       ...(row.output_board_id === null
         ? {}
         : { outputBoardId: row.output_board_id }),
-      request: ownObject(JSON.parse(row.request_json) as unknown),
+      request: parseStoredEnvelope(
+        row.request_json,
+        row.phase,
+        "Agent request",
+      ),
       ...(row.response_json === null
         ? {}
-        : { response: JSON.parse(row.response_json) as unknown }),
+        : {
+            response: parseStoredEnvelope(
+              row.response_json,
+              row.phase,
+              "Agent response",
+            ),
+          }),
       status: row.status,
       ...(row.exit_code === null ? {} : { exitCode: row.exit_code }),
       durationMs: row.duration_ms,
-      diagnostics: JSON.parse(row.diagnostics_json) as unknown,
+      diagnostics: parseStoredJson(row.diagnostics_json, "Agent diagnostics"),
       createdAt: row.created_at,
       ...(row.finished_at === null ? {} : { finishedAt: row.finished_at }),
     });

@@ -208,4 +208,226 @@ describe("project and session repositories", () => {
     });
     database.close();
   });
+
+  test("rejects non-object, wrong-phase, and oversized provider envelopes before writing", () => {
+    const { database, sessions } = setup();
+    const session = sessions.create({
+      interactionId: "json",
+      command: "ask",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    const base = {
+      sessionId: session.id,
+      agentId: "codex",
+      phase: "ask",
+      purpose: "answer",
+      modelExecution: {
+        observedModelIds: [],
+        verification: "unverified",
+      } as const,
+    };
+    for (const [id, request] of [
+      ["scalar", "ask"],
+      ["array", ["ask"]],
+      ["null", null],
+      ["wrong", { phase: "final" }],
+    ] as const) {
+      expect(() => {
+        sessions.createAgentRun({ ...base, id, request });
+      }).toThrow(/request|phase|object/i);
+    }
+    expect(() => {
+      sessions.createAgentRun({
+        ...base,
+        id: "large",
+        request: { phase: "ask", body: "x".repeat(1_048_577) },
+      });
+    }).toThrow(/bytes/i);
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM agent_runs").get(),
+    ).toEqual({ count: 0 });
+    database.close();
+  });
+
+  test("requires running creation and terminal response invariants without partial updates", () => {
+    const { database, sessions } = setup();
+    const session = sessions.create({
+      interactionId: "state",
+      command: "ask",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    const base = {
+      sessionId: session.id,
+      agentId: "codex",
+      phase: "ask",
+      purpose: "answer",
+      modelExecution: {
+        observedModelIds: [],
+        verification: "unverified",
+      } as const,
+      request: { phase: "ask" },
+    };
+    expect(() => {
+      sessions.createAgentRun({
+        ...base,
+        id: "terminal",
+        status: "completed",
+      });
+    }).toThrow(/running|status/i);
+    sessions.createAgentRun({ ...base, id: "run" });
+    expect(() => {
+      sessions.finishAgentRun({
+        id: "run",
+        status: "completed",
+        diagnostics: {},
+      });
+    }).toThrow(/response/i);
+    expect(sessions.getAgentRun("run").status).toBe("running");
+    for (const response of ["ask", ["ask"], null]) {
+      expect(() => {
+        sessions.finishAgentRun({
+          id: "run",
+          status: "completed",
+          response,
+          diagnostics: {},
+        });
+      }).toThrow(/response|object/i);
+    }
+    expect(() => {
+      sessions.finishAgentRun({
+        id: "run",
+        status: "completed",
+        response: { phase: "ask", body: "x".repeat(1_048_577) },
+        diagnostics: {},
+      });
+    }).toThrow(/bytes/i);
+    expect(() => {
+      sessions.finishAgentRun({
+        id: "run",
+        status: "completed",
+        response: { phase: "final" },
+        diagnostics: {},
+      });
+    }).toThrow(/phase/i);
+    expect(sessions.getAgentRun("run").status).toBe("running");
+    database.close();
+  });
+
+  test("reports tampered request JSON as storage corruption", () => {
+    const { database, sessions } = setup();
+    const session = sessions.create({
+      interactionId: "corrupt",
+      command: "ask",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    sessions.createAgentRun({
+      id: "run",
+      sessionId: session.id,
+      agentId: "codex",
+      phase: "ask",
+      purpose: "answer",
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "ask" },
+    });
+    database
+      .prepare("UPDATE agent_runs SET request_json = ? WHERE id = ?")
+      .run("[", "run");
+    expect(() => sessions.getAgentRun("run")).toThrow(/corrupt/i);
+    database.close();
+  });
+
+  test("database checks reject partial selections and loaders reject malformed responses", () => {
+    const { database, sessions } = setup();
+    const session = sessions.create({
+      interactionId: "raw",
+      command: "ask",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    sessions.createAgentRun({
+      id: "run",
+      sessionId: session.id,
+      agentId: "codex",
+      phase: "ask",
+      purpose: "answer",
+      modelExecution: {
+        requestedClass: "sol",
+        requestedCliModelId: "gpt-sol",
+        observedModelIds: ["gpt-sol"],
+        verification: "verified",
+      },
+      request: { phase: "ask" },
+    });
+    expect(() => {
+      database
+        .prepare("UPDATE agent_runs SET requested_model_id=NULL WHERE id=?")
+        .run("run");
+    }).toThrow();
+    sessions.finishAgentRun({
+      id: "run",
+      status: "completed",
+      response: { phase: "ask" },
+      diagnostics: {},
+    });
+    database
+      .prepare("UPDATE agent_runs SET response_json=? WHERE id=?")
+      .run("null", "run");
+    expect(() => sessions.getAgentRun("run")).toThrow(/corrupt/i);
+    database.close();
+  });
+
+  test("database checks enforce temporal, duration, and message-role invariants", () => {
+    const { database, sessions } = setup();
+    const session = sessions.create({
+      interactionId: "checks",
+      command: "ask",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    sessions.createAgentRun({
+      id: "run",
+      sessionId: session.id,
+      agentId: "codex",
+      phase: "ask",
+      purpose: "answer",
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "ask" },
+    });
+    expect(() => {
+      database
+        .prepare("UPDATE sessions SET status='completed' WHERE id=?")
+        .run(session.id);
+    }).toThrow();
+    expect(() => {
+      database
+        .prepare("UPDATE agent_runs SET duration_ms=-1 WHERE id=?")
+        .run("run");
+    }).toThrow();
+    expect(() => {
+      sessions.addMessage({
+        sessionId: session.id,
+        role: "invalid",
+        content: "x",
+      });
+    }).toThrow(/role/i);
+    database.close();
+  });
 });
