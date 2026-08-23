@@ -22,9 +22,9 @@ Invoke separately installed and authenticated Codex and Claude Code CLIs through
 
 For Codex, require and use `exec`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox read-only`, and `--cd` or `-C`. Codex receives a restrictive JSON Schema through a private temporary file path.
 
-For Claude, require and use `--bare`, `--tools "Read,Glob,Grep"`, `--disallowedTools "mcp__*"`, `--permission-mode plan`, `--no-session-persistence`, `-p`, `--output-format json`, and `--json-schema <compact-inline-json>`. The schema is one bounded argument, never a file path or shell fragment. `--bare` disables discovered MCP servers and customizations; the explicit `mcp__*` denial is defense in depth. Bash, Edit, Write, Notebook, and every tool other than Read, Glob, and Grep are unavailable.
+For Claude, require and use `--bare`, `--settings <compact-inline-json>`, `--tools "Read,Glob,Grep"`, `--disallowedTools "mcp__*"`, `--permission-mode plan`, `--no-session-persistence`, `-p`, `--output-format json`, and `--json-schema <compact-inline-json>`. The settings value `{"fallbackModel":[],"switchModelsOnFlag":false}` and response schema are separate bounded single arguments, never file paths or shell fragments. The settings disable availability fallback and automatic classifier-triggered model switching. `--bare` disables discovered MCP servers and customizations; the explicit `mcp__*` denial is defense in depth. Bash, Edit, Write, Notebook, and every tool other than Read, Glob, and Grep are unavailable.
 
-Capability and minimum-version probing fails closed if any essential flag or behavior is absent. Do not depend on `@openai/codex-sdk` in v0.1.
+Capability and minimum-version probing fails closed if any essential flag or behavior is absent, including the Claude settings and JSON `modelUsage` contracts needed by [ADR-0008](0008-allowlisted-provider-model-selections.md). Do not depend on `@openai/codex-sdk` in v0.1.
 
 Provider-local evidence IDs are untrusted run-scoped references. After claim canonicalization, host code deterministically assigns canonical `evidence-NNNN` IDs, merges mechanically identical path/range/hash references, retains invalid or missing references for audit, translates every claim/stance evidence link, and preserves each source in `evidence_origins`.
 
@@ -61,3 +61,4 @@ Revisit if official SDKs expose every required isolation and MCP-denial control,
 - [OpenAI Codex hardened-execution issue](https://github.com/openai/codex/issues/34802)
 - [Codex CLI exec argument source](https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs)
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
+- [Claude Code model configuration](https://code.claude.com/docs/en/model-config)

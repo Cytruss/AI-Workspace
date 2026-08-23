@@ -4,7 +4,7 @@
 
 **Goal:** Build Milestone 1: a locally hosted Discord bot that can run Codex, Claude, or both against an authorized Git project in enforced source-non-modifying mode; conduct structured, auditable `/debate` deliberations; persist results in SQLite; report status; and cancel active work.
 
-**Architecture:** Implement a TypeScript modular monolith whose domain services depend on explicit ports for agents, persistence, processes, and Discord. Invoke separately installed Codex and Claude Code CLIs through the same bounded process runner while keeping provider arguments inside their adapters, as accepted in [ADR-0007](../../decisions/0007-hardened-local-agent-clis.md). Resolve provider-specific concrete model classes through the configured allowlists from [ADR-0008](../../decisions/0008-allowlisted-provider-model-selections.md). Keep Discord-specific objects at the transport edge, validate source-non-modification capabilities before every run, and pass a compact persisted claim board into stateless provider calls. Use fake CLIs and transport ports for deterministic cross-platform tests.
+**Architecture:** Implement a TypeScript modular monolith whose domain services depend on explicit ports for agents, persistence, processes, and Discord. Invoke separately installed Codex and Claude Code CLIs through the same bounded process runner while keeping provider arguments inside their adapters, as accepted in [ADR-0007](../../decisions/0007-hardened-local-agent-clis.md). Resolve provider-specific concrete model classes through the configured allowlists from [ADR-0008](../../decisions/0008-allowlisted-provider-model-selections.md), propagate one normalized selection unchanged, and verify safely reported execution against that class. Resolve executables portably without shell lookup or broad filesystem scans. Keep Discord-specific objects at the transport edge, validate source-non-modification capabilities before every run, and pass a compact persisted claim board into stateless provider calls. Use fake CLIs and transport ports for deterministic cross-platform tests.
 
 **Tech Stack:** Node.js 22+, pnpm 11.19.0, TypeScript 5.9.3, discord.js 14.27.0, Zod 4.4.3, better-sqlite3 13.0.3, dotenv 17.4.2, Vitest 4.1.11, ESLint 10.9.0, Prettier 3.9.6, tsx 4.23.12.
 
@@ -30,7 +30,7 @@
 
 ```text
 src/
-├── cli/                     # setup, doctor, start and argument dispatch
+├── cli/                     # setup, doctor, executable resolution, start and argument dispatch
 ├── config/                  # schema, per-user paths and config loading
 ├── transport/discord/       # command definitions, handlers and Discord runtime
 ├── orchestrator/            # ask/debate lifecycle and active-run cancellation
@@ -221,7 +221,7 @@ describe("getAppPaths", () => {
 });
 ```
 
-Add `load-config.test.ts` cases for valid JSON, duplicate project IDs, a non-absolute project root, empty Discord allowlists, invalid execution mode, a missing token environment variable, all debate defaults, and every lower/upper boundary plus one-below/one-above rejection for each debate limit. Model-selection cases cover 0 and 25 entries, rejection at 26, duplicate classes, an unknown `defaultModel`, empty/oversized CLI model IDs and efforts, opaque provider-specific IDs, the concrete example mappings (Codex `sol`/`terra`/`luna`, Claude `opus`/`fable`/`sonnet`/`haiku`), and the portable default with an empty selection list and unset `defaultModel`.
+Add `load-config.test.ts` cases for valid JSON, duplicate project IDs, a non-absolute project root, empty Discord allowlists, invalid execution mode, a missing token environment variable, all debate defaults, and every lower/upper boundary plus one-below/one-above rejection for each debate limit. Model-selection cases cover 0 and 25 entries, rejection at 26, duplicate classes, an unknown `defaultModel`, empty/oversized CLI model IDs and efforts, opaque provider-specific IDs, bounded exact-ID and literal-prefix observation policies, duplicate observations, literal treatment of regex metacharacters, the concrete example mappings (Codex `sol`/`terra`/`luna`, Claude `opus`/`fable`/`sonnet`/`haiku`), and the portable default with an empty selection list and unset `defaultModel`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -241,10 +241,16 @@ export const ProjectConfigSchema = z.object({
 });
 
 const ModelClassSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
+const ObservedModelTokenSchema = z.string().min(1).max(200);
+export const AcceptedObservedModelsSchema = z.object({
+  exactIds: z.array(ObservedModelTokenSchema).max(25).default([]),
+  literalPrefixes: z.array(ObservedModelTokenSchema).max(8).default([]),
+});
 export const ModelSelectionSchema = z.object({
   class: ModelClassSchema,
   cliModelId: z.string().min(1).max(200),
-  effort: z.string().min(1).max(32).optional(),
+  requestedEffort: z.string().min(1).max(32).optional(),
+  acceptedObservedModels: AcceptedObservedModelsSchema,
 });
 
 export const ModelSelectionsSchema = z.object({
@@ -296,7 +302,7 @@ export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
 export type DebateConfig = z.infer<typeof DebateConfigSchema>;
 ```
 
-After parsing, refine that project IDs are unique and every root is absolute using `node:path.isAbsolute`. For each provider, require unique concrete model classes and require `defaultModel`, when set, to resolve to a configured selection. Unset `defaultModel` means provider default and does not create a synthetic class. Treat configured CLI model IDs and effort strings as opaque bounded values rather than hardcoded catalogs or entitlement claims.
+After parsing, refine that project IDs are unique and every root is absolute using `node:path.isAbsolute`. For each provider, require unique concrete model classes, at least one exact ID or literal prefix per configured selection, no duplicate exact IDs or prefixes, and require `defaultModel`, when set, to resolve to a configured selection. Unset `defaultModel` means provider default and does not create a synthetic class. Treat configured CLI model IDs, observation tokens, and effort strings as opaque bounded values rather than hardcoded catalogs or entitlement claims. Observation matching uses only equality and `startsWith`; strings such as `.*` are literal and never compiled or interpreted as patterns.
 
 - [ ] **Step 4: Implement portable paths and config I/O**
 
@@ -448,7 +454,7 @@ git commit -m "feat: enforce authorized Git projects"
 
 - [ ] **Step 1: Write failing migration and repository tests**
 
-Use an in-memory database and assert foreign keys, migration idempotency, project upsert, active-project scope, session transitions, messages, agent runs, errors, and complete deliberation round trips. The deliberation tests must reconstruct every provider call's nullable concrete model class/requested model ID/observed model ID/effort, exact bounded phase-discriminated request and response, purpose, input board, output board, claim origins, evidence origins, evidence resolution, translated claim/stance evidence links, stances, final positions, and immutable report without relying on message transcripts. Add tests for provider-default null persistence, explicit model persistence across every debate phase, invalid partial model-selection columns, broken cross-session/version/run references, an evidence row whose board does not exist, claim/stance evidence linked across boards, an evidence origin whose run belongs to another session, content-hash mismatch, duplicate provider-local claim or evidence origin within one run, cross-provider reuse of the same evidence-local ID, two exact duplicate claims from different agents merging without losing either origin, and mechanically identical evidence merging without losing either origin. Include this state test:
+Use an in-memory database and assert foreign keys, migration idempotency, project upsert, active-project scope, session transitions, messages, agent runs, errors, and complete deliberation round trips. The deliberation tests must reconstruct every provider call's nullable requested concrete model class/CLI model ID/effort, bounded observed-model-ID array, verification marker, exact bounded phase-discriminated request and response, purpose, input board, output board, claim origins, evidence origins, evidence resolution, translated claim/stance evidence links, stances, final positions, and immutable report without relying on message transcripts. Add tests for provider-default null persistence with unverified observations, explicit selection and `ModelExecution` persistence across every debate phase, model mismatch/missing-observation failure audit rows, invalid partial model-selection columns, broken cross-session/version/run references, an evidence row whose board does not exist, claim/stance evidence linked across boards, an evidence origin whose run belongs to another session, content-hash mismatch, duplicate provider-local claim or evidence origin within one run, cross-provider reuse of the same evidence-local ID, two exact duplicate claims from different agents merging without losing either origin, and mechanically identical evidence merging without losing either origin. Include this state test:
 
 ```ts
 const session = sessions.create({
@@ -511,14 +517,16 @@ CREATE TABLE debate_rounds (
 );
 CREATE TABLE agent_runs (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), agent_id TEXT NOT NULL,
-  model_class TEXT, requested_model_id TEXT, observed_model_id TEXT, resolved_effort TEXT,
+  requested_model_class TEXT, requested_model_id TEXT, requested_effort TEXT,
+  observed_model_ids_json TEXT NOT NULL, model_verification TEXT NOT NULL,
   round_id TEXT, phase TEXT NOT NULL, purpose TEXT NOT NULL,
   input_board_id TEXT, output_board_id TEXT,
   request_json TEXT NOT NULL, response_json TEXT, status TEXT NOT NULL,
   exit_code INTEGER, duration_ms INTEGER NOT NULL, diagnostics_json TEXT NOT NULL,
   created_at TEXT NOT NULL, finished_at TEXT, UNIQUE (id, session_id),
-  CHECK ((model_class IS NULL AND requested_model_id IS NULL AND resolved_effort IS NULL)
-    OR (model_class IS NOT NULL AND requested_model_id IS NOT NULL)),
+  CHECK ((requested_model_class IS NULL AND requested_model_id IS NULL AND requested_effort IS NULL)
+    OR (requested_model_class IS NOT NULL AND requested_model_id IS NOT NULL)),
+  CHECK (model_verification IN ('verified', 'unverified')),
   FOREIGN KEY (round_id, session_id) REFERENCES debate_rounds(id, session_id),
   FOREIGN KEY (input_board_id, session_id) REFERENCES claim_boards(id, session_id),
   FOREIGN KEY (output_board_id, session_id) REFERENCES claim_boards(id, session_id)
@@ -610,6 +618,8 @@ CREATE TABLE errors (
   code TEXT NOT NULL, message TEXT NOT NULL, context_json TEXT NOT NULL, created_at TEXT NOT NULL
 );
 ```
+
+Repository validation serializes `observed_model_ids_json` only from the bounded `ModelExecution` schema (maximum 25 unique IDs, 200 UTF-8 characters each) and rejects invalid JSON, duplicates, unsorted values, or a `verified` record without an explicit requested class/ID. A provider-default run keeps requested columns null and may store observations only as `unverified`. Failure rows for `MODEL_CLASS_CHANGED` and `MODEL_OBSERVATION_UNAVAILABLE` retain the attempted request fields, normalized observations, and bounded diagnostics.
 
 - [ ] **Step 4: Implement repository methods and transitions**
 
@@ -773,7 +783,7 @@ git commit -m "feat: add cancellable process runner"
 
 - [ ] **Step 1: Write failing contract-service tests**
 
-Test registry lookup, duplicate adapters, `both` ordering, unavailable adapters, safe environment preservation, secret removal, mandatory help flags, omitted/default/explicit concrete model resolution, and stable normalization of canonical claim, evidence, stance, round, final-position, and verdict data. Test each phase schema independently: correct discriminant, rejection of another phase's reserved fields, and forward-compatible unknown fields that are not reserved by another phase. Initial tests require unique local claim/evidence IDs and exactly resolved local evidence links. Cross-examination tests accept a canonical claim originating from the other provider and reject unknown/missing/duplicate claims, a local claim ID in the canonical namespace, unknown or duplicate existing canonical evidence IDs, duplicate new-evidence declarations, canonical IDs in the local namespace, and dangling/cross-run new-evidence IDs. Final tests enforce exactly one stance for every canonical board claim and reject extra/missing/duplicate claims plus the same evidence namespace errors.
+Test registry lookup, duplicate adapters, `both` ordering, unavailable adapters, safe environment preservation, secret removal, mandatory help flags, omitted/default/explicit concrete model resolution, and stable normalization of canonical claim, evidence, stance, round, final-position, and verdict data. Assert unknown/disallowed model classes fail before an argument builder or process-spawn spy runs; explicit resolution returns exactly `{ class, cliModelId, requestedEffort? }`; omission returns `undefined`; `AgentCapabilities` keeps model, effort/allowed-values, and observed-model-reporting support separate; and `AgentResult.modelExecution` bounds, sorts, and deduplicates observations without inventing observed effort. Test each phase schema independently: correct discriminant, rejection of another phase's reserved fields, and forward-compatible unknown fields that are not reserved by another phase. Initial tests require unique local claim/evidence IDs and exactly resolved local evidence links. Cross-examination tests accept a canonical claim originating from the other provider and reject unknown/missing/duplicate claims, a local claim ID in the canonical namespace, unknown or duplicate existing canonical evidence IDs, duplicate new-evidence declarations, canonical IDs in the local namespace, and dangling/cross-run new-evidence IDs. Final tests enforce exactly one stance for every canonical board claim and reject extra/missing/duplicate claims plus the same evidence namespace errors.
 
 ```ts
 expect(() => requireHelpFlags("Usage: tool --json", ["--json", "--read-only"]))
@@ -788,7 +798,7 @@ Expected: FAIL because shared agent modules do not exist.
 
 - [ ] **Step 3: Define agent types exactly as the approved spec**
 
-Create `AgentId`, `AgentCapabilities`, `AgentRequest`, `AgentResult`, and `AgentAdapter`. `AgentCapabilities` separately records model-option and effort-option support for fail-closed doctor output. `AgentRequest` carries a required phase-specific response schema for deliberation plus a pre-resolved concrete provider model selection; `AgentResult.structured` contains the matching validated draft or normalized ask data rather than an untyped provider payload. Add:
+Create `AgentId`, `AgentCapabilities`, `AgentRequest`, `AgentResult`, and `AgentAdapter`. `AgentCapabilities` separately records model-option support, effort-option support and safely knowable allowed values, and observed-model reporting for fail-closed doctor output. `AgentRequest` carries a required phase-specific response schema for deliberation plus an optional pre-resolved concrete provider model selection; `AgentResult.structured` contains the matching validated draft or normalized ask data rather than an untyped provider payload, and `AgentResult.modelExecution` always carries the normalized requested/observed model audit record. Add:
 
 ```ts
 export type BuiltInAgentId = "codex" | "claude";
@@ -823,9 +833,38 @@ CanonicalEvidence = { id: CanonicalEvidenceId; status: "VERIFIED" | "INVALID" | 
 CanonicalStance = { claimId: CanonicalClaimId; value: "ACCEPT" | "DISPUTE" | "UNCERTAIN"; reasoning: string; evidenceIds: CanonicalEvidenceId[] };
 ClaimBoard = { version: number; claims: CanonicalClaim[]; evidence: CanonicalEvidence[] };
 FinalPosition = { agentId: AgentId; agentRunId: string; roundId: string; stances: CanonicalStance[] };
-ResolvedModelSelection = Readonly<{ provider: AgentId; class: string | null; requestedModelId: string | null; effort: string | null }>;
+ModelExecution = Readonly<{ requestedClass?: string; requestedCliModelId?: string; requestedEffort?: string; observedModelIds: readonly string[]; verification: "verified" | "unverified" }>;
 Verdict = Readonly<{ claimId: string; classification: "CONSENSUS" | "DISAGREEMENT" | "REJECTED" | "UNRESOLVED"; support: "VERIFIED" | "UNSUPPORTED"; finalStances: readonly [StanceRecord, StanceRecord] | readonly StanceRecord[]; evidence: readonly CanonicalEvidence[]; provenance: readonly ClaimOrigin[]; counts: Readonly<VerdictCounts> }>;
 ```
+
+Use this exact normalized selection:
+
+```ts
+type ResolvedModelSelection = Readonly<{
+  class: string;
+  cliModelId: string;
+  requestedEffort?: string;
+}>;
+
+interface AgentCapabilities {
+  // Existing availability, version, authentication, safety, and diagnostic fields remain.
+  modelOption: { supported: boolean; flag?: string };
+  effortOption: { supported: boolean; flag?: string; allowedValues?: readonly string[] };
+  observedModelReporting: { supported: boolean; source?: string };
+}
+
+interface AgentRequest {
+  // Existing run, project, prompt, limits, and schema fields remain.
+  modelSelection?: ResolvedModelSelection;
+}
+
+interface AgentResult {
+  // Existing agent, status, content, duration, exit, and diagnostic fields remain.
+  modelExecution: ModelExecution;
+}
+```
+
+Provider default is represented only by an absent `AgentRequest.modelSelection`, never a partially null selection. `resolveModelSelection` returns one immutable object or `undefined`, rejects unknown/disallowed classes before argument building or process spawn, and copies `class`, `cliModelId`, and `requestedEffort` without provider-specific renaming. `ModelExecution.observedModelIds` is bounded, normalized, sorted, and deduplicated. Requested effort is never represented as observed effort.
 
 The discriminant selects one schema and makes provider drafts distinct from canonical host records. `InitialPhaseResponse` is the only variant with claims. Cross-examination validates exactly the supplied round review set; final validates exactly the entire supplied canonical claim set. Both later variants accept canonical claim IDs and existing canonical evidence IDs only from their input board, while `newEvidenceLocalIds` can resolve only against `newEvidence` in that same response/run. Reject every unknown, missing, duplicate, dangling, cross-run, and wrong-namespace ID before canonicalization. Unknown forward-compatible fields may be tolerated, but reserved fields owned by another phase (especially `claims`) are rejected. Verdict schemas are deeply immutable after construction.
 
@@ -876,14 +915,14 @@ git commit -m "feat: define agent adapter boundary"
 
 For Codex, assert `codex exec --help` contains complete tokens for `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox`, `--model`, the explicit `--config`/`-c` override used for effort, and `--cd` or `-C`. Provider-default run arguments omit model and effort options. An explicit resolved selection adds `--model`, the opaque CLI model ID, and, when configured, `--config`, `model_reasoning_effort="<effort>"` as direct array elements. Remaining arguments must be equivalent to `exec --ephemeral --ignore-user-config --ignore-rules --json --sandbox read-only -C <root> --output-schema <temporary-schema-path> -`. Parse the completed structured response from bounded JSONL and validate it against the exact requested Task 6 initial, cross-examination, or final schema.
 
-For Claude, assert version/help probing requires compatible, parseable version output and the complete tokens `--bare`, `--tools`, `--disallowedTools`, `--permission-mode`, `--no-session-persistence`, `--print` or `-p`, `--output-format`, `--json-schema`, `--model`, and `--effort`. Its exact safety argument subsequence is `--bare --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --permission-mode plan --no-session-persistence -p --output-format json --json-schema <compact-inline-json>`. Provider default omits model and effort options; an explicit selection adds `--model`, CLI model ID, and optional `--effort`, effort as direct array elements. The compact schema, with a UTF-8 limit of `MAX_RESPONSE_SCHEMA_BYTES = 32_768`, is passed as one array element without a shell. Parse the top-level JSON result, validate its structured payload against the exact requested initial, cross-examination, or final schema, and reject `is_error: true`.
+For Claude, assert version/help probing requires compatible, parseable version output and the complete tokens `--bare`, `--settings`, `--tools`, `--disallowedTools`, `--permission-mode`, `--no-session-persistence`, `--print` or `-p`, `--output-format`, `--json-schema`, `--model`, and `--effort`. Its exact safety argument subsequence is `--bare --settings '{"fallbackModel":[],"switchModelsOnFlag":false}' --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --permission-mode plan --no-session-persistence -p --output-format json --json-schema <compact-inline-json>`, where each quoted value shown is exactly one direct argument and JSON is compacted deterministically. Provider default omits model and effort options; an explicit selection adds `--model`, CLI model ID, and optional `--effort`, effort as direct array elements. The compact response schema, with a UTF-8 limit of `MAX_RESPONSE_SCHEMA_BYTES = 32_768`, is passed as one array element without a shell. Parse the top-level JSON result and its `modelUsage` object, validate its structured payload against the exact requested initial, cross-examination, or final schema, and reject `is_error: true` or a classifier refusal.
 
 ```ts
 expect(parseClaudeResult('{"is_error":false,"result":"analysis"}')).toBe("analysis");
 expect(parseCodexJsonl(codexFixture)).toEqual(expectedStructuredResponse);
 ```
 
-For each adapter, table-test the exact argument array for provider default, explicit concrete class without effort, and explicit concrete class with effort. Assert metacharacters remain one inert array value. Unknown/disallowed classes are rejected by selection resolution before either argument builder or process runner is called. Table-test all three response schemas through both providers: the transported schema has the requested discriminant and reserved fields, and a valid response from another phase is rejected.
+For each adapter, table-test the exact argument array for provider default, explicit concrete class without effort, and explicit concrete class with effort. Assert metacharacters remain one inert array value. Unknown/disallowed classes are rejected by selection resolution before either argument builder or process runner is called. Table-test all three response schemas through both providers: the transported schema has the requested discriminant and reserved fields, and a valid response from another phase is rejected. Claude tests also prove inline settings override ambient `fallbackModel` and `switchModelsOnFlag` values, availability errors and classifier refusals do not fall back, same-class version IDs pass literal exact/prefix matching, `opus` observing `sonnet` and `fable` observing `opus` fail `MODEL_CLASS_CHANGED`, and absent `modelUsage` for an explicit selection fails `MODEL_OBSERVATION_UNAVAILABLE`. Provider-default results preserve any observations with `unverified` verification.
 
 - [ ] **Step 2: Run adapter tests to verify they fail**
 
@@ -893,19 +932,21 @@ Expected: FAIL because adapter modules do not exist.
 
 - [ ] **Step 3: Implement the Codex adapter**
 
-`probe()` runs the separately installed `<command> --version` and `<command> exec --help` with a 10-second timeout and 256 KiB output limit through `runProcess`. It fails closed on an unparseable or unsupported version or unless every required safety, model, effort-override, and structured-output token is present, including one working-directory spelling. Record the supported minimum version/range and argument spellings in a reviewed adapter compatibility constant and fixture. `run()` receives a pre-resolved selection, probes first, captures Git integrity, writes the selected phase response schema only after enforcing `MAX_RESPONSE_SCHEMA_BYTES = 32_768` to a private temporary directory, invokes the exact hardened argument set through `runProcess`, parses bounded JSONL, captures integrity again, and fails with `PROJECT_INTEGRITY_CHANGED` if the snapshots differ. Remove only that Codex temporary schema and directory in `finally` without following links.
+`probe()` runs the separately installed `<command> --version` and `<command> exec --help` with a 10-second timeout and 256 KiB output limit through `runProcess`. It fails closed on an unparseable or unsupported version or unless every required safety, model, effort-override, and structured-output token is present, including one working-directory spelling. Report model, effort, safely knowable effort values, and observed-model support independently; do not claim observation support unless the reviewed JSONL contract exposes it. Record the supported minimum version/range and argument spellings in a reviewed adapter compatibility constant and fixture. `run()` receives a pre-resolved selection, probes first, captures Git integrity, writes the selected phase response schema only after enforcing `MAX_RESPONSE_SCHEMA_BYTES = 32_768` to a private temporary directory, invokes the exact hardened argument set through `runProcess`, parses bounded JSONL, produces `ModelExecution` (possibly `unverified` when Codex has no safe observed-model field), captures integrity again, and fails with `PROJECT_INTEGRITY_CHANGED` if the snapshots differ. Remove only that Codex temporary schema and directory in `finally` without following links.
 
 Pass only `OPENAI_API_KEY`, `CODEX_HOME`, and the runtime-critical environment names from Task 6. Map process completion, failure, cancellation, timeout, output limit, and malformed structured output to normalized agent outcomes.
 
 - [ ] **Step 4: Implement the Claude adapter**
 
-`probe()` runs the separately installed `<command> --version` and `<command> --help` through `runProcess`, rejects unparseable or unsupported versions against a reviewed compatibility constant, and fails closed unless every mandatory safety, ambient-isolation, session, model, effort, and structured-output flag is present. `run()` receives a pre-resolved selection and uses the same integrity snapshots as Codex but creates no schema file: it compacts the selected phase JSON schema, enforces the 32,768-byte UTF-8 bound, and supplies it as exactly one `--json-schema` argument. The argument builder emits `--bare`, `--tools`, `Read,Glob,Grep`, `--disallowedTools`, `mcp__*`, `--permission-mode`, `plan`, `--no-session-persistence`, `-p`, `--output-format`, `json`, `--json-schema`, and the compact schema value, plus direct model/effort elements only for an explicit selection; the prompt travels through bounded stdin and no shell interprets any value. Pass only `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, and runtime-critical environment names.
+`probe()` runs the separately installed `<command> --version` and `<command> --help` through `runProcess`, rejects unparseable versions below `CLAUDE_MINIMUM_HARDENED_VERSION = "2.1.233"`, and fails closed unless every mandatory safety, ambient-isolation, session, settings, model, effort, model-observation, and structured-output capability is present. This conservative reviewed compatibility floor covers the complete locally verified flag set and the documented `fallbackModel`, `switchModelsOnFlag`, and JSON `modelUsage` contracts; changing it requires updated fixtures and integration evidence. `run()` receives a pre-resolved selection and uses the same integrity snapshots as Codex but creates no schema file: it compacts the selected phase JSON schema, enforces the 32,768-byte UTF-8 bound, and supplies it as exactly one `--json-schema` argument. The argument builder emits `--bare`, `--settings`, the compact single-argument value `{"fallbackModel":[],"switchModelsOnFlag":false}`, `--tools`, `Read,Glob,Grep`, `--disallowedTools`, `mcp__*`, `--permission-mode`, `plan`, `--no-session-persistence`, `-p`, `--output-format`, `json`, `--json-schema`, and the compact schema value, plus direct model/effort elements only for an explicit selection; the prompt travels through bounded stdin and no shell interprets any value. Pass only `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, and runtime-critical environment names.
 
-`--bare` disables discovered MCP servers and customizations; `--disallowedTools "mcp__*"` is required defense in depth against ambient MCP tools. Only Read, Glob, and Grep are available. Do not pass or expose Bash, Edit, Write, Notebook, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--allowedTools`, or edit-capable permission modes.
+`--bare` disables discovered MCP servers and customizations; `--disallowedTools "mcp__*"` is required defense in depth against ambient MCP tools. Inline settings override any ambient fallback configuration: an empty `fallbackModel` chain disables availability fallback, and `switchModelsOnFlag:false` turns a non-interactive classifier refusal into a failure rather than a class switch. Only Read, Glob, and Grep are available. Do not pass or expose Bash, Edit, Write, Notebook, `--fallback-model`, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--allowedTools`, or edit-capable permission modes.
+
+Parse `modelUsage` keys into a bounded sorted unique `observedModelIds` array. For an explicit selection, require at least one observation and require every ID to equal an accepted exact ID or start with an accepted literal prefix from that class's configuration. On mismatch return failed `MODEL_CLASS_CHANGED`; on absence return failed `MODEL_OBSERVATION_UNAVAILABLE`. Preserve the attempted `ModelExecution`, raw bounded provider diagnostics, and observations in both failures, and never format their content as a valid selected-model result. Alias movement to a newer version within the accepted class is valid; exact pinning uses a full `cliModelId` and exact accepted IDs. Effort remains requested-only, and unsupported values fail the capability gate before spawn.
 
 - [ ] **Step 5: Add fake-process integration coverage**
 
-Inject executable names, separate argument builders, and the process runner. Exercise both complete adapter lifecycles with fake Node CLIs while asserting fail-closed version/capability checks for every required flag, prompt stdin, all three structured phase schemas, bounded diagnostics, output-limit termination, actionable unsupported/unauthorized model errors without fallback, unchanged Git state, and complete descendant-tree cancellation. Codex tests assert the selected restrictive phase schema file path occupies the `--output-schema` value and that the one Codex temporary file is removed in `finally`. Claude tests assert the selected compact phase schema occupies exactly one inline `--json-schema` array element, no schema file is created or removed, the exact Read/Glob/Grep allowlist is present, `--bare` and explicit `mcp__*` denial are both present, and Bash/Edit/Write/Notebook plus ambient MCP tools cannot be invoked. Both tests assert resolved model/effort values are direct inert arguments and provider default omits them. The same integration suite must be runnable on Windows, macOS, and Linux CI.
+Inject executable names, separate argument builders, and the process runner. Exercise both complete adapter lifecycles with fake Node CLIs while asserting fail-closed version/capability checks for every required flag, prompt stdin, all three structured phase schemas, bounded diagnostics, output-limit termination, actionable unsupported/unauthorized model errors without fallback, normalized `ModelExecution`, unchanged Git state, and complete descendant-tree cancellation. Codex tests assert the selected restrictive phase schema file path occupies the `--output-schema` value and that the one Codex temporary file is removed in `finally`. Claude tests assert the selected compact phase schema occupies exactly one inline `--json-schema` array element, no schema file is created or removed, the exact fallback-neutralizing settings JSON occupies one `--settings` element despite conflicting ambient user settings, the exact Read/Glob/Grep allowlist is present, `--bare` and explicit `mcp__*` denial are both present, and Bash/Edit/Write/Notebook plus ambient MCP tools cannot be invoked. Fake results exercise `modelUsage` normalization, same-class alias-version acceptance, missing observation, cross-class changes, classifier refusal, and availability failure. Both tests assert the unchanged resolved model/effort values are direct inert arguments and provider default omits them. The same integration suite must be runnable on Windows, macOS, and Linux CI.
 
 - [ ] **Step 6: Run adapter tests and commit**
 
@@ -937,7 +978,7 @@ git commit -m "feat: add hardened Codex and Claude CLI adapters"
 
 - [ ] **Step 1: Write failing orchestration tests**
 
-Use in-memory fake adapters and a temporary SQLite database. Test one agent, both agents in parallel, one-of-two failure, both failure, cancellation, unavailable adapter, configured concurrency, duplicate interaction delivery, and persistence ordering. Add selection tests for omitted options resolving to each provider's configured `defaultModel` or provider default when unset, separate `codexModel` and `claudeModel` concrete classes for `both`, an unknown/disallowed class failing before any fake adapter call, provider-default argument omission, and persisted nullable class/requested model/observed model/effort on each run.
+Use in-memory fake adapters and a temporary SQLite database. Test one agent, both agents in parallel, one-of-two failure, both failure, cancellation, unavailable adapter, configured concurrency, duplicate interaction delivery, and persistence ordering. Add selection tests for omitted options resolving to each provider's configured `defaultModel` or provider default when unset, separate `codexModel` and `claudeModel` concrete classes for `both`, an unknown/disallowed class failing before any fake adapter call or process spawn, provider-default argument omission, exact `ResolvedModelSelection` propagation into `AgentRequest`, and persisted requested fields, observed ID array, verification, and bounded diagnostics on each successful or failed run.
 
 ```ts
 const report = await service.ask({
@@ -1007,7 +1048,7 @@ export class AskService {
 }
 ```
 
-Before creating work, query the repository by `interactionId`. Return its persisted terminal report when already completed, or raise `INTERACTION_IN_PROGRESS` while it is active. Resolve the explicit project or scoped active project and each selected provider's separate optional concrete class against configuration before persisting or starting a process. Persist the user message, run each selected adapter through `ConcurrencyGate` with its immutable `ResolvedModelSelection`, combine `both` with `Promise.allSettled`, preserve deterministic Codex-then-Claude output ordering, persist nullable class/requested model ID/observed model ID/effort and every response, and unregister the controller in `finally`. One success plus one failure is `partial`; two failures are `failed`; an authorized abort is `cancelled`. Provider default omits model arguments; unknown classes and unsupported/unauthorized models never fall back.
+Before creating work, query the repository by `interactionId`. Return its persisted terminal report when already completed, or raise `INTERACTION_IN_PROGRESS` while it is active. Resolve the explicit project or scoped active project and each selected provider's separate optional concrete class against configuration before persisting or starting a process. Resolution produces one immutable `ResolvedModelSelection { class, cliModelId, requestedEffort? }` or `undefined`; pass it unchanged in `AgentRequest.modelSelection`. Persist the user message, run each selected adapter through `ConcurrencyGate`, combine `both` with `Promise.allSettled`, preserve deterministic Codex-then-Claude output ordering, persist the complete `AgentResult.modelExecution` and every response/failure, and unregister the controller in `finally`. One success plus one failure is `partial`; two failures are `failed`; an authorized abort is `cancelled`. Provider default omits model arguments; unknown classes and unsupported/unauthorized models never fall back.
 
 - [ ] **Step 6: Run orchestration tests and commit**
 
@@ -1079,7 +1120,8 @@ Use schema-valid fake adapters and an in-memory database. Cover all of these cas
 - only `InitialPhaseResponse` may contain claims; cross-examination/final `claims` fields are rejected, including attempted counterclaims after initial board creation;
 - cross-examination covers its supplied canonical review set exactly once and accepts claims originating from the other provider; final covers every canonical board claim exactly once, while earlier stances never repair a missing final stance;
 - cross-examination and final reject unknown/missing/duplicate/wrong-namespace canonical claim/evidence IDs, dangling or cross-run new-evidence local IDs, and duplicate local evidence declarations; valid same-response new evidence is canonicalized and translated into the next board;
-- omitted or explicit concrete provider classes resolve once before the debate starts, persist nullable class/requested model ID/observed model ID/effort on every run, and remain identical for that provider across initial, every cross-examination round, and final; unknown classes start no processes and provider errors never fall back;
+- omitted or explicit concrete provider classes resolve once before the debate starts; the exact same optional immutable `ResolvedModelSelection` value is passed in every `AgentRequest` for that provider across initial, every cross-examination round, and final. Every `AgentResult.modelExecution`, including failures, persists requested fields, normalized observed IDs, verification, and bounded diagnostics; unknown classes start no processes and provider errors never fall back;
+- explicit Claude selections accept newer observed IDs only within the configured concrete class, reject a different class with `MODEL_CLASS_CHANGED`, reject absent `modelUsage` with `MODEL_OBSERVATION_UNAVAILABLE`, and treat classifier refusal or model unavailability as failure; provider-default runs preserve observations as potentially `unverified`;
 - the default and every boundary value from `DebateConfig` reach `DebateService`, are recorded on the session, and enforce rounds, board claim count, and serialized byte count;
 - every provider call receives only the topic, rules, response schema, and a compact claim board bounded by the effective configuration, never the unconstrained transcript or a hidden resumed session;
 - every persisted provider call can be reconstructed exactly from its request/response and input/output board hashes;
@@ -1120,7 +1162,7 @@ Create a deeply immutable structured verdict with canonical claim ID, classifica
 
 - [ ] **Step 7: Implement degraded operation, cancellation, and persistence**
 
-Before both initial responses exist, one-agent failure returns the successful independent analysis with `DEBATE_NOT_ESTABLISHED`. Later failure yields `partial`, retaining the claim board, completed rounds, stances, evidence, final positions, and `UNRESOLVED` verdicts for affected claims. `DebateService.debate(input, config: DebateConfig)` resolves `codexModel` and `claudeModel` concrete classes before process creation, freezes those selections for the session, records the effective immutable config, registers with `ActiveRuns`, passes one abort signal through every queued/provider operation, persists terminal state exactly once, and unregisters in `finally`.
+Before both initial responses exist, one-agent failure returns the successful independent analysis with `DEBATE_NOT_ESTABLISHED`. Later failure yields `partial`, retaining the claim board, completed rounds, stances, evidence, final positions, and `UNRESOLVED` verdicts for affected claims. `DebateService.debate(input, config: DebateConfig)` resolves `codexModel` and `claudeModel` concrete classes before process creation, freezes the resulting optional `ResolvedModelSelection` values for the session, passes each unchanged in every provider `AgentRequest`, records the effective immutable config and every returned `ModelExecution`, registers with `ActiveRuns`, passes one abort signal through every queued/provider operation, persists terminal state exactly once, and unregisters in `finally`.
 
 - [ ] **Step 8: Run deliberation tests and commit**
 
@@ -1193,7 +1235,7 @@ Register the at-most-25 configured classes as provider-specific Discord choices,
 
 - [ ] **Step 4: Implement formatting and the pure command handler**
 
-Format `/models` with each provider's configured concrete classes, default class or provider-default-by-omission, and an entitlement-not-verified warning. Format ask results with project, session ID, status, separate agent headings, persisted concrete class/requested model ID/observed model ID/effort, safe diagnostics, and no raw environment values. Format debate results with the one frozen selection per provider and separate `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, and `UNRESOLVED` sections, followed by mechanically resolved evidence and provenance. Label consensus without verified evidence as `UNSUPPORTED`; do not merge or relabel verdicts in model-written prose. Use messages no longer than 1,900 characters; return a concise message plus an in-memory UTF-8 attachment for longer reports.
+Format `/models` with each provider's configured concrete classes, default class or provider-default-by-omission, accepted observation policy summary, and an entitlement-not-verified warning. Format ask results and `/status` with project, session ID, status, separate agent headings, persisted requested class/CLI model ID/effort, all observed model IDs, verification marker, safe diagnostics, and no raw environment values. A model-verification failure is never displayed as valid content. Format debate results with the one frozen selection per provider and separate `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, and `UNRESOLVED` sections, followed by mechanically resolved evidence and provenance. Label consensus without verified evidence as `UNSUPPORTED`; do not merge or relabel verdicts in model-written prose. Use messages no longer than 1,900 characters; return a concise message plus an in-memory UTF-8 attachment for longer reports.
 
 The handler must defer `/ask` and `/debate` immediately, pass `interactionId` into the appropriate service, then edit the reply on success or known failure. A repeated interaction returns the persisted terminal report and never starts another provider call. Other commands reply directly. Map stable domain errors to actionable English messages without stack traces.
 
@@ -1221,8 +1263,10 @@ git commit -m "feat: expose agent questions through Discord"
 - Create: `src/cli/doctor.ts`
 - Create: `src/cli/start.ts`
 - Create: `src/cli/parse-command.ts`
+- Create: `src/cli/resolve-agent-command.ts`
 - Create: `src/index.ts`
 - Create: `tests/unit/cli/parse-command.test.ts`
+- Create: `tests/unit/cli/resolve-agent-command.test.ts`
 - Create: `tests/integration/vertical-slice.test.ts`
 - Create: `README.md`
 - Create: `SECURITY.md`
@@ -1236,7 +1280,7 @@ git commit -m "feat: expose agent questions through Discord"
 
 - [ ] **Step 1: Write failing CLI and vertical-slice tests**
 
-Test exact command parsing for `setup`, `doctor`, and `start`, plus invalid commands. The vertical-slice test must create a temporary Git project and database, configure concrete Codex/Claude classes, use fake Codex and Claude CLI processes, invoke the Discord-neutral `/models`, `/ask both`, and `/debate` handlers, and assert:
+Test exact command parsing for `setup`, `doctor`, and `start`, plus invalid commands. Unit-test executable resolution in this strict order: configured explicit path, direct `PATH` segment lookup, then narrow documented candidates. Cover Windows executable extensions and `%APPDATA%\npm\claude.cmd` plus `%USERPROFILE%\.local\bin\claude.exe`; cover the provider-documented `~/.local/bin/claude` launcher on macOS and Linux; and assert absent environment variables, missing files, and non-executable candidates produce actionable diagnostics. Tests must prove no recursive home scan, credential/session read, shell invocation, or `PATH` mutation is attempted. The vertical-slice test must create a temporary Git project and database, configure concrete Codex/Claude classes, use fake Codex and Claude CLI processes, invoke the Discord-neutral `/models`, `/ask both`, and `/debate` handlers, and assert:
 
 ```ts
 expect(reply.status).toBe("completed");
@@ -1246,7 +1290,7 @@ expect(sessionRepository.recent(1)).toHaveLength(1);
 expect(await captureGitIntegrity(projectRoot)).toEqual(before);
 ```
 
-For `/debate`, assert that initial, cross-examination, and final calls receive their exact discriminated schemas; both agents receive explicit claim-board context; same-response new evidence is translated; forbidden later claims and ID namespace violations fail; every call is reconstructible; orphan/cross-board evidence FKs reject invalid rows; canonical IDs and duplicate origins are persisted; selected concrete model class/requested ID/observed ID/effort remain fixed per provider across phases; final-stances-only verdicts render in separate classification sections with mechanical evidence status; the run obeys all effective `DebateConfig` limits; and Git integrity remains unchanged. Test provider-default omission and unknown class/no-process behavior separately. The all-success fake-provider runs must never be formatted as partial or failed.
+For `/debate`, assert that initial, cross-examination, and final calls receive their exact discriminated schemas; both agents receive explicit claim-board context; same-response new evidence is translated; forbidden later claims and ID namespace violations fail; every call is reconstructible; orphan/cross-board evidence FKs reject invalid rows; canonical IDs and duplicate origins are persisted; one immutable optional `ResolvedModelSelection` per provider reaches every phase; all `ModelExecution` requested fields, observed ID arrays, verification, and failures persist and render; final-stances-only verdicts render in separate classification sections with mechanical evidence status; the run obeys all effective `DebateConfig` limits; and Git integrity remains unchanged. Test provider-default omission, same-class alias version changes, class mismatch, missing explicit observations, classifier refusal, ambient fallback settings neutralization, and unknown class/no-process behavior separately. The all-success fake-provider runs must never be formatted as partial or failed.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1261,29 +1305,31 @@ export type CliCommand = { name: "setup" } | { name: "doctor" } | { name: "start
 export function parseCommand(argv: readonly string[]): CliCommand;
 ```
 
-Use `node:readline/promises` in `setup` to collect Discord application ID, guild IDs, authorized user IDs, one or more project ID/name/root triples, and optional concrete model class/CLI ID/effort mappings plus `defaultModel` for each provider. Default to empty model lists and unset defaults. Show Codex `sol`/`terra`/`luna` and Claude `opus`/`fable`/`sonnet`/`haiku` mappings only as optional examples, never entitlement claims. Validate each project with Task 3 and all selections with Task 2 before saving. Create `.env` only after explicit confirmation, write only `AI_WORKSPACE_DISCORD_TOKEN=<entered value>`, set restrictive permissions where supported, and never echo the token.
+Use `node:readline/promises` in `setup` to collect Discord application ID, guild IDs, authorized user IDs, one or more project ID/name/root triples, optional explicit provider executable paths, and optional concrete model class/CLI ID/requested-effort/accepted-observation mappings plus `defaultModel` for each provider. Default to empty model lists and unset defaults. Show Codex `sol`/`terra`/`luna` and Claude `opus`/`fable`/`sonnet`/`haiku` mappings only as optional examples, never entitlement claims. Validate each project with Task 3 and all selections with Task 2 before saving. Resolve executables by configured explicit path first, direct `PATH` lookup second, and narrow documented candidates third. Setup may offer a discovered command path, but saves it only after showing the portable form and receiving explicit confirmation; it never mutates `PATH`. Create `.env` only after explicit confirmation, write only `AI_WORKSPACE_DISCORD_TOKEN=<entered value>`, set restrictive permissions where supported, and never echo the token.
 
 - [ ] **Step 4: Implement doctor and startup composition**
 
-`doctor` prints OS, Node, Git, config path, database writability, each project validation result, and each agent's capability diagnostics. It validates configured model/effort flag support from version/help output without making a paid inference call. It explicitly reports that account entitlement is runtime-only unless the provider exposes a stable safe listing contract; configured concrete selections are not entitlement guarantees. It redacts home-relative details from shareable output unless `--verbose` is introduced in a separate design.
+`resolveAgentCommand()` never invokes a shell. It validates a configured explicit path first, checks each `PATH` directory directly second, and checks only narrow platform candidates third: `%APPDATA%\npm\claude.cmd` and `%USERPROFILE%\.local\bin\claude.exe` on Windows, and `~/.local/bin/claude` on macOS/Linux. The latter native-launcher locations are provider documented; the Windows npm shim is a narrowly documented common-install diagnostic. Do not recurse through a home directory, read credentials or session files, or alter `PATH`. Return the resolution source and a safe actionable diagnostic when unresolved.
+
+`doctor` prints OS, Node, Git, config path, database writability, each project validation result, executable resolution source, and each agent's capability diagnostics. It validates configured model/effort flag support, safely knowable allowed effort values, observed-model reporting, and Claude fallback-control compatibility from version/help data without making a paid inference call. It explicitly reports that account entitlement and runtime model observations are runtime-only unless the provider exposes a stable safe listing contract; configured concrete selections are not entitlement guarantees. If a candidate exists outside the current process `PATH`, doctor suggests running setup to save it and does not mutate the environment. It redacts home-relative details from shareable output unless `--verbose` is introduced in a separate design.
 
 `start` loads `.env`, config, paths, database, migrations, projects, repositories, adapters, registry, ask and debate services, command handler, and Discord runtime in that order. On `SIGINT` or `SIGTERM`, stop accepting interactions, call `ActiveRuns.cancelAll()`, wait up to 10 seconds, destroy the Discord client, close SQLite, and exit.
 
 - [ ] **Step 5: Write operator and contributor documentation**
 
-`README.md` must link `docs/decisions/README.md` and contain prerequisites for all three operating systems, clone/install commands, Discord application creation, `.env` setup, `pnpm setup`, `pnpm doctor`, `pnpm start`, `/models`, `/ask`, and `/debate topic:<text> project:<id?> codex_model:<class?> claude_model:<class?>` examples, local data locations, separate Codex and Claude CLI installation/authentication links, source-non-modification guarantees, the complete-host-read-isolation limitation, structured deliberation and deterministic-verdict guarantees, mechanical evidence limitations, model entitlement limitations, and troubleshooting. Document configurable concrete model classes with Codex `sol`/`terra`/`luna` and Claude `opus`/`fable`/`sonnet`/`haiku` as non-entitlement examples, provider default by omission, fixed per-provider debate selections, and no fallback. `SECURITY.md` documents the allowlist, Git-tracked-only symlink rule, provider capability gate, ambient-config isolation flags, integrity backstop, host read-isolation limitation, secret handling, and vulnerability reporting. `CONTRIBUTING.md` documents pnpm, TDD, quality commands, ADR usage, English-only public artifacts, and the no-secret rule.
+`README.md` must link `docs/decisions/README.md` and contain prerequisites for all three operating systems, clone/install commands, Discord application creation, `.env` setup, `pnpm setup`, `pnpm doctor`, `pnpm start`, `/models`, `/ask`, and `/debate topic:<text> project:<id?> codex_model:<class?> claude_model:<class?>` examples, local data locations, separate Codex and Claude CLI installation/authentication links, portable executable-resolution order and narrow candidate troubleshooting, source-non-modification guarantees, the complete-host-read-isolation limitation, structured deliberation and deterministic-verdict guarantees, mechanical evidence limitations, model entitlement/observation limitations, and troubleshooting. Document configurable concrete model classes with Codex `sol`/`terra`/`luna` and Claude `opus`/`fable`/`sonnet`/`haiku` as non-entitlement examples, provider default by omission, fixed requested class per provider, same-class alias evolution, optional exact pinning, literal accepted-observation policies, Claude fallback neutralization, model-verification failures, and requested-not-observed effort. `SECURITY.md` documents the allowlist, Git-tracked-only symlink rule, provider capability gate, ambient-config/fallback isolation flags, model-class verification, integrity backstop, host read-isolation limitation, secret handling, and vulnerability reporting. `CONTRIBUTING.md` documents pnpm, TDD, quality commands, ADR usage, English-only public artifacts, and the no-secret rule.
 
 - [ ] **Step 6: Run the complete verification suite**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 
-Expected: every command exits 0; the vertical-slice test proves `/models`, `/ask`, and `/debate`, separate concrete provider selections, provider-default omission, fixed debate models, exact phase schemas, both hardened CLI adapters, reconstructible claim-board/model/evidence persistence, exhaustive deterministic verdict formatting, process-tree cancellation, bounded context, and unchanged Git state without real credentials.
+Expected: every command exits 0; the vertical-slice test proves `/models`, `/ask`, and `/debate`, separate concrete provider selections, provider-default omission, unchanged requested model classes across debate phases, observed-model verification, exact phase schemas, both hardened CLI adapters, reconstructible claim-board/model/evidence persistence, exhaustive deterministic verdict formatting, process-tree cancellation, bounded context, and unchanged Git state without real credentials.
 
 - [ ] **Step 7: Perform opt-in local smoke checks**
 
 Run: `pnpm doctor`
 
-Expected on the current machine: Git and Node pass; each CLI reports supported hardened safety/model/effort capabilities or an actionable installation, authentication, or missing-flag diagnostic. Doctor makes no paid model call and labels entitlement as unverified when no safe listing contract exists. Do not weaken tests or adapter policy to make an unavailable or unsafe local CLI appear healthy.
+Expected on the current machine: Git and Node pass; each CLI reports its resolved command source plus supported hardened safety/model/effort/observation capabilities or an actionable installation, path, authentication, or missing-flag diagnostic. A CLI installed in a narrow common location but absent from the current process `PATH` is detected and offered for setup confirmation, not silently persisted. Doctor makes no paid model call and labels entitlement and runtime model observation as unverified when no safe listing contract exists. Do not weaken tests or adapter policy to make an unavailable or unsafe local CLI appear healthy.
 
 After the operator installs and authenticates both CLIs and configures a private Discord bot, run `pnpm start`; inspect `/models`; issue `/ask agent:both question:Summarize this project without changing files codex_model:sol claude_model:sonnet` when those concrete classes are configured; issue `/debate topic:Identify the highest-risk module and justify the choice codex_model:terra claude_model:opus` when configured; verify the selections remain fixed across phases and all verdict classes/evidence statuses render separately; then issue a long-running request followed by `/stop`. Confirm `git status --short` is unchanged.
 
@@ -1304,8 +1350,9 @@ Before declaring the dual-agent vertical slice complete, verify all of the follo
 - `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` all exit 0.
 - CI passes on Windows, macOS, and Linux.
 - `pnpm setup` creates only local configuration and an ignored `.env`.
-- `pnpm doctor` reports real provider capabilities and fails closed for unsupported source-non-modification modes.
-- Model configuration accepts at most 25 unique concrete classes per provider, uses provider default when `defaultModel` and command options are absent, and rejects unknown classes before process creation.
+- `pnpm doctor` reports executable resolution plus real provider safety, model, effort, and observation capabilities and fails closed for unsupported source-non-modification or Claude fallback-control contracts without paid inference.
+- Executable resolution checks configured explicit paths, direct `PATH` entries, and only narrow platform candidates in that order; it never recursively scans home, reads provider credentials/sessions, or mutates `PATH`.
+- Model configuration accepts at most 25 unique concrete classes per provider with bounded literal exact/prefix observation policies, uses provider default when `defaultModel` and command options are absent, and rejects unknown classes before process creation.
 - `/models` lists configured provider-specific concrete classes/defaults; `/ask` and `/debate` accept separate optional `codex_model` and `claude_model` choices with no shared/raw model input.
 - `/ask` works for Codex, Claude, and both.
 - `/debate topic:<text> project:<id?>` runs independent provider-local initial claims/evidence, deterministic canonical claim and evidence IDs with complete many-to-one origins and local-to-canonical translation, shared persisted claim-board snapshots, cross-examination, configured bounded unresolved-claim rounds, independent final positions, and exhaustive final-stances-only verdict derivation.
@@ -1313,11 +1360,11 @@ Before declaring the dual-agent vertical slice complete, verify all of the follo
 - Discord renders `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, `UNRESOLVED`, and mechanical evidence status separately, including `UNSUPPORTED` consensus.
 - Provider calls use explicit bounded context and do not depend on hidden session history.
 - One agent failure produces a partial response rather than discarding the successful result.
-- SQLite reconstructs every provider request/response and contains nullable concrete model class/requested ID/observed ID/effort for every run, hashed board snapshots, canonical claims and evidence, separate many-to-one claim/evidence origins, claim/stance evidence joins, mechanically resolved invalid/missing/verified references, phase-linked rounds and runs, audit stances, final positions, immutable verdicts, and bounded diagnostics.
+- SQLite reconstructs every provider request/response and contains nullable requested concrete class/CLI ID/effort, bounded normalized observed-model-ID array, verification marker, and model-verification failure diagnostics for every run, plus hashed board snapshots, canonical claims and evidence, separate many-to-one claim/evidence origins, claim/stance evidence joins, mechanically resolved invalid/missing/verified references, phase-linked rounds and runs, audit stances, final positions, immutable verdicts, and bounded diagnostics.
 - `/stop` terminates the complete agent process tree and records cancellation.
-- Both CLI version/capability probes fail closed if any required safety, ambient-isolation, session, or structured-output flag is absent; Claude uses `--bare`, the exact Read/Glob/Grep allowlist, explicit `mcp__*` denial, plan permission mode, no session persistence, print mode, and JSON output.
+- Both CLI version/capability probes fail closed if any required safety, ambient-isolation, session, model, effort, observation, or structured-output contract is absent; Claude uses `--bare`, inline fallback-neutralizing `--settings`, the exact Read/Glob/Grep allowlist, explicit `mcp__*` denial, plan permission mode, no session persistence, print mode, and JSON output.
 - Codex alone receives a bounded restrictive schema file that is removed in `finally`; Claude receives the bounded compact schema JSON inline as one argument, and neither adapter invokes a shell.
-- Model IDs and efforts are direct inert argument-array elements; one selection per provider remains fixed through every debate phase, and unsupported/unauthorized models never silently fall back.
+- Model IDs and requested efforts are direct inert argument-array elements; one immutable `ResolvedModelSelection` per provider reaches every debate phase. Claude availability/classifier fallback is disabled, every explicit selected class is verified against normalized JSON `modelUsage`, mismatches or absent observations fail with stable codes, and unsupported/unauthorized models never silently fall back.
 - The selected Git project has identical pre-run and post-run integrity snapshots.
 - Only Git-tracked symlinks are rejected for escaping the project root; dependency-manager symlink layouts remain valid.
 - No Discord token, personal path, guild ID, user ID, or project-specific name is tracked by Git.

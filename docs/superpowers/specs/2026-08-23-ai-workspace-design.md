@@ -61,6 +61,20 @@ The orchestrator depends on a normalized contract rather than CLI-specific flags
 ```ts
 type AgentId = "codex" | "claude" | string;
 
+interface ResolvedModelSelection {
+  readonly class: string;
+  readonly cliModelId: string;
+  readonly requestedEffort?: string;
+}
+
+interface ModelExecution {
+  readonly requestedClass?: string;
+  readonly requestedCliModelId?: string;
+  readonly requestedEffort?: string;
+  readonly observedModelIds: readonly string[];
+  readonly verification: "verified" | "unverified";
+}
+
 interface AgentCapabilities {
   available: boolean;
   version?: string;
@@ -68,6 +82,9 @@ interface AgentCapabilities {
   nonInteractive: boolean;
   structuredOutput: boolean;
   readOnlyEnforcement: boolean;
+  modelOption: { supported: boolean; flag?: string };
+  effortOption: { supported: boolean; flag?: string; allowedValues?: readonly string[] };
+  observedModelReporting: { supported: boolean; source?: string };
   diagnostics: string[];
 }
 
@@ -79,6 +96,7 @@ interface AgentRequest {
   timeoutMs: number;
   maxOutputBytes: number;
   responseSchema?: unknown;
+  modelSelection?: ResolvedModelSelection;
 }
 
 interface AgentResult {
@@ -88,6 +106,7 @@ interface AgentResult {
   structured?: unknown;
   exitCode?: number;
   durationMs: number;
+  modelExecution: ModelExecution;
   diagnostics: string[];
 }
 
@@ -98,15 +117,17 @@ interface AgentAdapter {
 }
 ```
 
-Each adapter owns executable discovery, arguments, structured-output parsing, and provider-specific permission settings. Setup records detected capabilities, but every run validates critical read-only capabilities again so an upgraded or replaced executable cannot silently weaken policy.
+Each adapter owns executable discovery, arguments, structured-output parsing, model-execution observation, and provider-specific permission settings. Setup records detected capabilities, but every run validates critical read-only capabilities again so an upgraded or replaced executable cannot silently weaken policy. Model, effort, and observed-model-reporting capabilities are independent: safely knowable effort values may be reported, but no adapter implies that requested effort was observed.
 
 Both adapters invoke their separately installed CLIs through the bounded process runner, as decided in [ADR-0007](../../decisions/0007-hardened-local-agent-clis.md). Codex requires `exec`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox read-only`, and `--cd` or `-C`. It receives a restrictive JSON Schema through a private temporary file path.
 
-Claude requires `--bare`, `--tools "Read,Glob,Grep"`, `--disallowedTools "mcp__*"`, `--permission-mode plan`, `--no-session-persistence`, `-p`, `--output-format json`, and `--json-schema <compact-inline-json>`. `--bare` disables discovered MCP servers and customizations, while explicit MCP denial is defense in depth. Bash, Edit, Write, Notebook, and every built-in tool other than Read, Glob, and Grep are unavailable. The compact schema JSON is bounded and passed inline as one argument; it is never written to the Codex schema file or interpreted by a shell.
+Claude requires `--bare`, `--settings <compact-inline-json>`, `--tools "Read,Glob,Grep"`, `--disallowedTools "mcp__*"`, `--permission-mode plan`, `--no-session-persistence`, `-p`, `--output-format json`, and `--json-schema <compact-inline-json>`. The settings value is exactly the bounded JSON object `{"fallbackModel":[],"switchModelsOnFlag":false}` and is passed as one argument without a shell. The empty documented fallback chain disables availability fallback; `switchModelsOnFlag:false` makes classifier refusal fail the non-interactive call instead of changing class. `--bare` disables discovered MCP servers and customizations, while explicit MCP denial is defense in depth. Bash, Edit, Write, Notebook, and every built-in tool other than Read, Glob, and Grep are unavailable. The compact response-schema JSON is bounded and passed inline as one argument; it is never written to the Codex schema file or interpreted by a shell.
 
-Capability and minimum-version probing independently verifies every essential provider flag and fails closed if any safety, customization-isolation, MCP-denial, session-persistence, or structured-output capability is absent.
+Capability and minimum-version probing independently verifies every essential provider flag and fails closed if any safety, customization-isolation, MCP-denial, session-persistence, fallback-control, model-observation, or structured-output capability is absent. Claude probing requires `--settings` and initially requires version 2.1.233 or later, the reviewed local compatibility floor for the complete required flag set and the documented `fallbackModel`, `switchModelsOnFlag`, and JSON `modelUsage` contracts. Changing that floor requires updated fixtures and adapter integration evidence.
 
-Both adapters also capability-probe the provider-specific model and effort argument mechanism described by ADR-0008. A configured concrete selection is resolved before process creation and appended as direct argument-array elements; omission appends nothing and uses provider default. The host never invokes a shell, passes an unallowlisted Discord value, or silently retries with a different model after an unsupported/unauthorized failure.
+Both adapters also capability-probe the provider-specific model and effort argument mechanism described by ADR-0008. A configured concrete selection is resolved before process creation as an immutable `ResolvedModelSelection` and appended as direct argument-array elements; omission appends nothing and uses provider default. Ask and debate pass that object unchanged to every applicable call. The host never invokes a shell, passes an unallowlisted Discord value, or silently retries with a different model after an unsupported/unauthorized failure.
+
+Claude parses the actual models from JSON `modelUsage`, normalizes them to a sorted unique array, and requires observations for an explicit selection. Every observed ID must match an exact ID or literal prefix in the configured selected-class policy; no operator string is interpreted as a regular expression. A mismatch fails as `MODEL_CLASS_CHANGED`; missing observations fail as `MODEL_OBSERVATION_UNAVAILABLE`. Both retain bounded diagnostics and attempted `ModelExecution` data and are never rendered as valid results. Provider-default calls persist all observations but may be `unverified`. Aliases may resolve to newer versions inside the same configured class; full CLI IDs plus exact accepted IDs provide operator-controlled pinning. Requested effort is persisted but is not described as observed.
 
 ## Configuration and Local Data
 
@@ -115,7 +136,7 @@ The setup command creates a validated JSON configuration in the operating system
 - Discord guild and authorized user identifiers.
 - Registered project IDs, display names, and absolute roots.
 - Available agent adapters and optional Codex and Claude executable overrides.
-- Provider-specific concrete model-selection allowlists from [ADR-0008](../../decisions/0008-allowlisted-provider-model-selections.md). Each provider has 0 through 25 unique public classes mapped to opaque non-empty CLI model IDs and optional bounded effort strings. `defaultModel`, when set, resolves to a configured class; when unset, omission means provider default. Portable initial configuration has no selections and no default model.
+- Provider-specific concrete model-selection allowlists from [ADR-0008](../../decisions/0008-allowlisted-provider-model-selections.md). Each provider has 0 through 25 unique public classes mapped to opaque non-empty CLI model IDs, optional bounded effort strings, and a bounded accepted-observation policy containing literal exact IDs and/or literal family prefixes. Prefix comparison never executes configuration as a regular expression. `defaultModel`, when set, resolves to a configured class; when unset, omission means provider default. Portable initial configuration has no selections and no default model.
 - Default agent, optional presentation polisher, round limit, timeouts, output limits, and concurrency.
 - Debate limits: `maxRounds` defaults to `3` and is bounded from `1` through `5`; `maxBoardClaims` defaults to `40` and is bounded from `2` through `200`; `maxBoardBytes` defaults to `65536` and is bounded from `4096` through `262144`.
 - Logging level and local data-retention settings.
@@ -130,7 +151,25 @@ interface DebateConfig {
 }
 ```
 
-Model IDs and effort values are operator configuration, not entitlement assertions. Suggested concrete classes are Codex `sol`, `terra`, and `luna` resolving to `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`, and Claude `opus`, `fable`, `sonnet`, and `haiku` resolving to their official CLI aliases. Accounts may not expose every suggested model, so these examples are never inserted automatically.
+The normalized configured model selection is also exact:
+
+```ts
+interface ConfiguredModelSelection {
+  class: string; // provider-unique public Discord choice
+  cliModelId: string; // opaque direct CLI argument
+  requestedEffort?: string;
+  acceptedObservedModels: {
+    exactIds: string[]; // 0..25 bounded non-empty strings
+    literalPrefixes: string[]; // 0..8 bounded non-empty strings
+  }; // at least one combined entry; duplicates rejected
+}
+```
+
+Each provider has at most 25 selections. Model class is bounded to 32 characters, CLI IDs and observation entries to 200 UTF-8 characters, and requested effort to 32 characters. Equality and `startsWith` are the only observation operations; metacharacters have no special meaning.
+
+Model IDs, accepted observations, and effort values are operator configuration, not entitlement assertions. Suggested concrete classes are Codex `sol`, `terra`, and `luna` resolving to `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`, and Claude `opus`, `fable`, `sonnet`, and `haiku` resolving to their official CLI aliases with literal family prefixes such as `claude-opus-`. Accounts may not expose every suggested model, so these examples are never inserted automatically.
+
+Agent executable resolution is portable and deterministic. A configured explicit path is validated first, then the process `PATH` is searched without invoking a shell, then only narrowly documented candidates are checked: `%APPDATA%\npm\claude.cmd` for a Windows npm installation and the provider-documented native launcher (`%USERPROFILE%\.local\bin\claude.exe` on Windows or `~/.local/bin/claude` on macOS/Linux). The resolver never recursively scans a home directory, reads credentials or provider sessions, or mutates `PATH`. Setup may offer to persist a detected path only after explicit confirmation; doctor reports the attempted resolution order and an actionable command/path diagnostic.
 
 Secrets are loaded from the process environment or an untracked local `.env` file. The repository contains `.env.example` with example variable names and empty values only. Secrets are never persisted in SQLite or included in logs, prompts, diagnostics, or Discord output.
 
@@ -159,12 +198,12 @@ At command registration, each model option contains only that provider's configu
 1. Discord authenticates the interaction; AI Workspace verifies guild, user, command, and project authorization.
 2. The project service resolves the user's active project and validates its canonical root.
 3. The orchestrator resolves each requested provider model class against its configured allowlist before creating a process. Unknown or disallowed classes fail without starting an agent. Omitted options use `defaultModel` when configured or provider default when unset.
-4. The orchestrator creates persisted session and run records. A debate freezes one resolved selection per provider for all initial, cross-examination, and final calls; v0.1 never switches models between rounds.
+4. The orchestrator creates persisted session and run records. A debate freezes one `ResolvedModelSelection` per provider for all initial, cross-examination, and final calls and passes it unchanged; v0.1 never requests a different class between rounds.
 5. The context builder creates a minimal prompt from project metadata, the current request, and an explicit compact claim board when deliberation state is required. V0.1 does not retrieve semantic memory.
 6. The permission service checks the requested mode and adapter capabilities.
 7. The adapter directly spawns the selected CLI through the bounded process runner with an argument array and a restricted environment.
 8. The process runner bounds stdout and stderr, applies the timeout, listens for cancellation, and terminates the complete descendant process tree.
-9. The adapter normalizes the response. Persistence records the outcome before Discord formatting begins.
+9. The adapter normalizes the response and `ModelExecution`. An explicit Claude selection is successful only when every reported `modelUsage` ID verifies as the selected class. Persistence records successes and model-verification failures before Discord formatting begins.
 10. The formatter returns the response, partial result, or actionable diagnostic.
 
 Agent-to-agent communication always passes through the orchestrator. Agents never invoke each other directly. Every provider call is stateless by default and receives all required context explicitly; correctness never depends on hidden provider session history.
@@ -258,7 +297,7 @@ SQLite is stored in the per-user application-data directory and migrated transac
 - `evidence_origins`: many-to-one provenance from canonical evidence to agent, run, and provider-local evidence ID.
 - `claim_evidence` and `stance_evidence`: translated canonical many-to-many links from claims and stances to evidence.
 - `debate_rounds`: phase, ordering, completion state, and foreign keys to exact input and output board snapshots.
-- `agent_runs`: adapter, nullable selected concrete class, requested/resolved CLI model ID, optional observed model ID, effort, round, phase/purpose, exact bounded discriminated request/response payloads, input/output board references, status, duration, exit metadata, and bounded diagnostics.
+- `agent_runs`: adapter, nullable requested concrete class and CLI model ID, requested effort, bounded normalized observed-model-ID array, `verified`/`unverified` marker, round, phase/purpose, exact bounded discriminated request/response payloads, input/output board references, status, duration, exit metadata, and bounded diagnostics. Model mismatch and missing-observation failures retain these audit fields.
 - `stances`: `ACCEPT`, `DISPUTE`, or `UNCERTAIN` audit-history records linked to the producing run, round, and canonical claim.
 - `final_positions`: each agent's independent final stances linked to the producing run, round, and canonical claims.
 - `verdicts`: immutable deterministic classifications, evidence support, provenance, stance/run links, counts, and content hash.
@@ -273,6 +312,7 @@ Long-term semantic memory for facts, hypotheses, experiments, decisions, rejecte
 - `/ask` for an unavailable agent returns setup instructions without creating a child process.
 - `/ask both` runs available adapters independently and returns a successful response even when the other adapter fails.
 - Unknown/disallowed model classes fail before process creation. Unsupported or unauthorized configured model failures produce provider-specific actionable diagnostics and never retry with or silently fall back to another selection.
+- Claude availability fallback is disabled, classifier refusal is a failure, and observed cross-class execution fails as `MODEL_CLASS_CHANGED`; a missing explicit observation fails as `MODEL_OBSERVATION_UNAVAILABLE`.
 - `/debate` requires both adapters at the start and reports a partial debate if failure occurs after useful work exists.
 - Discord delivery failures do not discard persisted results; `/status` can locate the completed session.
 - SQLite migration or corruption errors prevent startup rather than running without persistence.
@@ -283,7 +323,7 @@ Long-term semantic memory for facts, hypotheses, experiments, decisions, rejecte
 
 Vitest is used for unit and integration tests. Fake Node-based agent executables simulate successful structured output, streaming output, malformed data, authentication failures, non-zero exits, hangs, oversized output, ignored termination signals, and spawned child processes.
 
-Unit tests cover configuration selection count/duplicates/defaults, separate provider model selection, argument arrays, authorization, path validation, all three phase-discriminated schemas, exact board coverage, other-provider claims, every local/canonical ID namespace error, canonical claim/evidence assignment, cross-provider ID reuse, within-run collisions, duplicate merges and origin preservation, new-evidence translation, deliberation state transitions, the exhaustive verdict matrix, mechanical evidence resolution, immutable polishing checks, bounded context, error mapping, formatting, and redaction. Integration tests cover persisted selection reproducibility, one-selection-per-provider-per-debate enforcement, SQLite migrations and complete phase-specific call reconstruction, orphan/cross-board evidence rejection, ambient MCP denial, process-tree cancellation, timeouts, output limits, and both CLI adapters' three structured-output schemas and distinct schema transports. Discord tests use a transport boundary rather than a live server.
+Unit tests cover configuration selection/observation-policy count, duplicates, defaults, literal-prefix matching, separate provider model selection, normalized request/result model contracts, argument arrays, authorization, executable candidates on Windows/macOS/Linux, path validation, all three phase-discriminated schemas, exact board coverage, other-provider claims, every local/canonical ID namespace error, canonical claim/evidence assignment, cross-provider ID reuse, within-run collisions, duplicate merges and origin preservation, new-evidence translation, deliberation state transitions, the exhaustive verdict matrix, mechanical evidence resolution, immutable polishing checks, bounded context, error mapping, formatting, and redaction. Integration tests cover unknown selection rejection before spawn, unchanged selection propagation through every debate call, persisted `ModelExecution`, accepted same-class alias version changes, cross-class and absent-observation failures, Claude `modelUsage` normalization, ambient fallback-settings neutralization, SQLite migrations and complete phase-specific call reconstruction, orphan/cross-board evidence rejection, ambient MCP denial, process-tree cancellation, timeouts, output limits, and both CLI adapters' three structured-output schemas and distinct schema transports. Discord tests use a transport boundary rather than a live server.
 
 CI runs on Windows, macOS, and Linux using the supported Node version. Tests requiring real accounts are opt-in smoke tests and never run in public CI. Release checks include formatting, linting, type checking, unit tests, integration tests, secret scanning, and a clean install from a fresh clone.
 
@@ -323,6 +363,8 @@ The repository is licensed under Apache License 2.0. This permits private, comme
 - [Codex hardened-execution issue](https://github.com/openai/codex/issues/34802)
 - [Codex CLI exec argument source](https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs)
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
+- [Claude Code model configuration](https://code.claude.com/docs/en/model-config)
+- [Claude Code setup and launcher locations](https://code.claude.com/docs/en/setup)
 - [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.html)
 
 ## Success Criteria
