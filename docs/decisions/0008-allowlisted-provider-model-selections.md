@@ -22,15 +22,15 @@ Portable initial configuration has an empty allowlist and no `defaultModel`. Abs
 
 `/ask` and `/debate` expose separate optional `codex_model` and `claude_model` choices. They never accept a shared model option or a raw model ID. Discord registers the configured concrete classes as provider-specific choices, and `/models` lists choices and whether omission uses provider default. The host resolves and validates selections before any process starts. One resolved selection per provider is frozen for an entire debate and used in every initial, cross-examination, and final call.
 
-Adapters pass resolved model IDs and efforts as direct argument-array values without a shell. Codex uses its probed model option and explicit CLI configuration override for reasoning effort; Claude uses its probed model and effort options. Ask and debate orchestration resolve once, then pass the same immutable selection into every applicable call. Unsupported or unauthorized model failures are actionable and never trigger fallback.
+Adapters pass resolved model IDs and efforts as direct argument-array values without a shell. Codex uses its probed model option and explicit CLI configuration override for reasoning effort; Claude uses its probed model and effort options. Ask and debate orchestration resolve once, then pass the same immutable selection into every applicable call. If `requestedEffort` is present, the capability probe must report a bounded `allowedValues` list containing it; absent values or a non-member fail before spawn with `AGENT_EFFORT_UNSUPPORTED`. Omitted effort remains valid. Unsupported or unauthorized model failures are actionable and never cause an application-level retry with another selection.
 
-For Claude, AI Workspace passes an inline `--settings` JSON argument containing `{"fallbackModel":[],"switchModelsOnFlag":false}` in addition to `--bare`. The empty availability-fallback chain is the documented no-fallback form, and disabling flagged-message switching makes a classifier refusal a failed call in non-interactive mode rather than a model change. Capability probing requires `--settings` and initially version 2.1.233 or later, the conservative reviewed floor for the complete locally verified flag set and documented settings/output contracts; tests prove ambient user fallback settings cannot re-enable either path.
+For Claude, AI Workspace passes an inline `--settings` JSON argument containing `{"fallbackModel":[],"switchModelsOnFlag":false}` in addition to `--bare`. This overrides ordinary user, shared-project, and project-local fallback configuration. Anthropic managed and server-managed settings have higher precedence than `--settings` and can override it; AI Workspace therefore cannot guarantee pre-execution fallback prevention. Capability probing requires `--settings` and initially version 2.1.233 or later, the conservative reviewed floor for the complete locally verified flag set and documented settings/output contracts. Tests prove ordinary local settings are neutralized and managed-like cross-class output is rejected after execution.
 
-Claude JSON results must include `modelUsage` for every explicit selection. The adapter normalizes and sorts all model IDs in that object and verifies every ID against the selected class's literal exact-ID/prefix policy. A different class fails with `MODEL_CLASS_CHANGED`; absent observations fail with `MODEL_OBSERVATION_UNAVAILABLE`. Both failures retain bounded diagnostics and the attempted model-execution record for audit and are never formatted as a valid selected-model result. Provider-default runs preserve any observations but may remain `unverified`.
+Claude JSON results must include `modelUsage` for every explicit selection. After provider execution, the adapter normalizes and sorts all model IDs in that object and verifies every ID against the selected class's literal exact-ID/prefix policy. A different class fails with `MODEL_CLASS_CHANGED`; absent observations fail with `MODEL_OBSERVATION_UNAVAILABLE`. Both failures retain bounded diagnostics and the attempted model-execution record for audit and are never formatted as a valid selected-model result. They do not undo provider work or cost already incurred. Provider-default runs preserve any observations but remain `unverified` because no class was selected.
 
 This is a model-**class** stability guarantee, not an immutable alias-to-version guarantee. An alias can resolve to a newer approved version in the same configured class. Effort is persisted as requested because neither CLI contract is assumed to report effective effort; unsupported configured effort fails capability validation before spawn, while any documented provider-side adjustment is reported separately and never treated as model-class verification.
 
-`doctor` validates model and effort flag capabilities from version/help output without paid inference. It cannot prove account entitlement unless a provider later exposes a stable, safe, non-inference model-listing contract; entitlement is otherwise discovered only when the selected model runs.
+`doctor` validates model and effort flag capabilities, including safely knowable effort allowed values, from version/help output without paid inference. It cannot prove account entitlement, effective managed settings, or runtime model use unless a provider later exposes a stable, safe, non-inference contract. It reports that managed settings can cause fallback work/cost before post-execution class validation and that provider-default runs remain unverified.
 
 Documented concrete examples are Codex classes `sol`, `terra`, and `luna` mapped to `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`, and Claude classes `opus`, `fable`, `sonnet`, and `haiku` mapped to their official CLI aliases. Accounts may not expose every example, so portable defaults do not insert them automatically.
 
@@ -51,14 +51,14 @@ Documented concrete examples are Codex classes `sol`, `terra`, and `luna` mapped
 - Freezing selection across debate phases makes results reproducible and comparisons coherent.
 - Persisted requested and observed values explain which concrete configuration produced every output.
 - Literal accepted-observation policies support class verification without unsafe operator-supplied regular expressions.
-- Availability fallback and classifier switching are disabled for Claude, so a selected class is never silently replaced by another class.
+- Ordinary local availability fallback and classifier-switch settings are neutralized for Claude; managed-policy cross-class execution is detected and rejected after execution.
 
 ## Consequences
 
 - Operators maintain mappings that match their accounts and installed CLI versions.
 - Configuration validation and Discord registration enforce a 25-selection limit per provider.
 - `doctor` can prove flag compatibility but normally cannot prove entitlement without making a paid call.
-- A selected model becoming unavailable or refused causes an actionable run failure rather than silent fallback.
+- AI Workspace never performs its own silent retry or fallback, but managed Claude policy may execute a fallback before post-execution validation rejects it.
 - Claude aliases may move to newer versions within the configured class; operators who require an exact version must configure a full ID and exact accepted observations.
 - Provider-default executions may be unverified because no class was selected.
 
@@ -72,3 +72,4 @@ Revisit if either provider exposes a stable safe model-listing or effective-effo
 - [Codex CLI exec argument source](https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs)
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
 - [Claude Code model configuration](https://code.claude.com/docs/en/model-config)
+- [Claude Code settings precedence](https://code.claude.com/docs/en/settings)
