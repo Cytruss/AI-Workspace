@@ -1,10 +1,47 @@
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, saveConfig } from "../../../src/config/load-config.js";
 
+type FileSystemPromises = typeof import("node:fs/promises");
+
+const fileSystemMocks = vi.hoisted(() => ({
+  actual: undefined as FileSystemPromises | undefined,
+  chmod: vi.fn<FileSystemPromises["chmod"]>(),
+  rename: vi.fn<FileSystemPromises["rename"]>(),
+  rm: vi.fn<FileSystemPromises["rm"]>(),
+  writeFile: vi.fn<FileSystemPromises["writeFile"]>(),
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<FileSystemPromises>();
+  fileSystemMocks.actual = actual;
+  return {
+    ...actual,
+    chmod: fileSystemMocks.chmod,
+    rename: fileSystemMocks.rename,
+    rm: fileSystemMocks.rm,
+    writeFile: fileSystemMocks.writeFile,
+  };
+});
+
 const tokenEnvironment = { AI_WORKSPACE_DISCORD_TOKEN: "secret" };
+
+beforeEach(() => {
+  const actual = fileSystemMocks.actual;
+  if (actual === undefined) {
+    throw new Error("Filesystem test doubles were not initialized");
+  }
+  fileSystemMocks.chmod.mockReset().mockImplementation(actual.chmod);
+  fileSystemMocks.rename.mockReset().mockImplementation(actual.rename);
+  fileSystemMocks.rm.mockReset().mockImplementation(actual.rm);
+  fileSystemMocks.writeFile.mockReset().mockImplementation(actual.writeFile);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function validConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -355,4 +392,73 @@ describe("saveConfig", () => {
       expect((await stat(configFile)).mode & 0o777).toBe(0o600);
     }
   });
+
+  it.each(["ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM", "EACCES"])(
+    "treats POSIX chmod %s as unsupported after a successful atomic write",
+    async (code) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      fileSystemMocks.chmod.mockRejectedValue(
+        Object.assign(new Error(code), { code }),
+      );
+      const directory = await mkdtemp(join(tmpdir(), "ai-workspace-chmod-"));
+      const configFile = join(directory, "config.json");
+      const config = await parse(validConfig());
+
+      await expect(saveConfig(configFile, config)).resolves.toBeUndefined();
+      expect(JSON.parse(await readFile(configFile, "utf8"))).toEqual(config);
+    },
+  );
+
+  it("uses rename as the last fallible mutation and atomic commit point", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const actual = fileSystemMocks.actual;
+    if (actual === undefined) {
+      throw new Error("Filesystem test doubles were not initialized");
+    }
+    const events: string[] = [];
+    fileSystemMocks.chmod.mockImplementation(async (...arguments_) => {
+      events.push(`chmod:${String(arguments_[0])}`);
+      await actual.chmod(...arguments_);
+    });
+    fileSystemMocks.rename.mockImplementation(async (...arguments_) => {
+      events.push("rename");
+      await actual.rename(...arguments_);
+    });
+    const directory = await mkdtemp(join(tmpdir(), "ai-workspace-commit-"));
+    const configFile = join(directory, "config.json");
+    const config = await parse(validConfig());
+
+    await saveConfig(configFile, config);
+
+    expect(events.at(-1)).toBe("rename");
+    expect(events).not.toContain(`chmod:${configFile}`);
+  });
+
+  it.each(["write", "chmod", "rename"] as const)(
+    "preserves the primary %s failure when temporary-file cleanup also fails",
+    async (operation) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const primaryError = Object.assign(new Error(`${operation} failed`), {
+        code: "EIO",
+      });
+      const cleanupError = Object.assign(new Error("cleanup failed"), {
+        code: "EACCES",
+      });
+      const directory = await mkdtemp(join(tmpdir(), "ai-workspace-primary-"));
+      const configFile = join(directory, "config.json");
+      const config = await parse(validConfig());
+      if (operation === "write") {
+        fileSystemMocks.writeFile.mockRejectedValue(primaryError);
+      } else if (operation === "chmod") {
+        fileSystemMocks.chmod
+          .mockResolvedValueOnce()
+          .mockRejectedValueOnce(primaryError);
+      } else {
+        fileSystemMocks.rename.mockRejectedValue(primaryError);
+      }
+      fileSystemMocks.rm.mockRejectedValue(cleanupError);
+
+      await expect(saveConfig(configFile, config)).rejects.toBe(primaryError);
+    },
+  );
 });
