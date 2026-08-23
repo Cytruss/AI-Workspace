@@ -8,6 +8,7 @@ export default tseslint.config(
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   {
+    files: ["**/*.{ts,tsx,mts,cts}"],
     languageOptions: {
       globals: {
         process: "readonly",
@@ -17,5 +18,9 @@ export default tseslint.config(
         tsconfigRootDir: import.meta.dirname,
       },
     },
+  },
+  {
+    files: ["**/*.{js,mjs,cjs}"],
+    extends: [tseslint.configs.disableTypeChecked],
   },
 );

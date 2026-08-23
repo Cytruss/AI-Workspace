@@ -6,7 +6,7 @@
 
 **Architecture:** Implement a TypeScript modular monolith whose domain services depend on explicit ports for agents, persistence, processes, and Discord. Keep CLI-specific arguments inside adapters, keep Discord-specific objects at the transport edge, and validate read-only capabilities before every run. Use fake agent processes and transport ports for deterministic cross-platform tests.
 
-**Tech Stack:** Node.js 22+, pnpm 11.19.0, TypeScript 7.0.2, discord.js 14.27.0, Zod 4.4.3, better-sqlite3 13.0.3, dotenv 17.4.2, Vitest 4.1.11, ESLint 10.9.0, Prettier 3.9.6, tsx 4.23.12.
+**Tech Stack:** Node.js 22+, pnpm 11.19.0, TypeScript 5.9.3, @openai/codex-sdk 0.149.0, discord.js 14.27.0, Zod 4.4.3, better-sqlite3 13.0.3, dotenv 17.4.2, Vitest 4.1.11, ESLint 10.9.0, Prettier 3.9.6, tsx 4.23.12.
 
 **Spec:** `docs/superpowers/specs/2026-08-23-ai-workspace-design.md`
 
@@ -53,6 +53,7 @@ tests/
 
 **Files:**
 - Create: `package.json`
+- Create: `pnpm-workspace.yaml`
 - Create: `tsconfig.json`
 - Create: `eslint.config.mjs`
 - Create: `vitest.config.ts`
@@ -95,6 +96,7 @@ Create `package.json` with exact runtime and development dependencies:
     "start": "tsx src/index.ts start"
   },
   "dependencies": {
+    "@openai/codex-sdk": "0.149.0",
     "better-sqlite3": "13.0.3",
     "discord.js": "14.27.0",
     "dotenv": "17.4.2",
@@ -107,11 +109,19 @@ Create `package.json` with exact runtime and development dependencies:
     "eslint": "10.9.0",
     "prettier": "3.9.6",
     "tsx": "4.23.12",
-    "typescript": "7.0.2",
+    "typescript": "5.9.3",
     "typescript-eslint": "8.67.0",
     "vitest": "4.1.11"
   }
 }
+```
+
+Create `pnpm-workspace.yaml` with this narrow lifecycle-build allowlist:
+
+```yaml
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
 ```
 
 Set `tsconfig.json` to `module` and `moduleResolution` `NodeNext`, `target` `ES2023`, `strict: true`, `noUncheckedIndexedAccess: true`, `exactOptionalPropertyTypes: true`, `rootDir: "."`, and `outDir: "dist"`. Configure ESLint with `@eslint/js` recommended and `typescript-eslint` strict type-checked rules. Configure Vitest to include `tests/**/*.test.ts`, use the Node environment, and clear mocks.

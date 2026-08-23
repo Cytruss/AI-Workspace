@@ -1,4 +1,6 @@
+.superpowers/
 coverage/
 dist/
+docs/superpowers/
 node_modules/
 pnpm-lock.yaml
