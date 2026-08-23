@@ -2,7 +2,7 @@
 
 ## Result
 
-REMEDIATED — PENDING RE-REVIEW. The first, second, third, and fourth architecture reviews failed. Their findings have been addressed in successive remediation commits, but this report does not claim review acceptance.
+REMEDIATED — PENDING RE-REVIEW. The first, second, third, fourth, and fifth architecture reviews failed. Their findings have been addressed in successive remediation commits, but this report does not claim review acceptance.
 
 Architecture amendment commit: `8565acca7238b842076e9ee8eb0f5eed9a1a533a` (`docs: strengthen architecture for structured debate`).
 
@@ -16,6 +16,8 @@ Architecture/remediation history:
 - `12c1906cb65b697955732b0e5848a8843d2ee7d9` — third-review architecture remediation and model-selection decision.
 - `847da0a3e3128fd7cc23b3a74e63a564fd63dccc` — third-remediation report and ledger evidence.
 - `ba5bb22a45d9ef5532bd3092a8ce3f64fb898c46` — fourth-review model-execution, Claude fallback, and executable-discovery remediation.
+- `0e568a6c348706168cea165c5eff2774786eeafc` — fourth-remediation report and ledger evidence.
+- `366600941188c0afc8899f3bc5a43eb3587ab37f` — fifth-review managed-settings, native-executable, and effort-capability remediation.
 
 ## Changed files
 
@@ -165,3 +167,30 @@ Setup and doctor now resolve commands in a portable order: configured explicit p
 The full architecture diff was inspected for spec/plan contradictions. Tracked-file scans found no personal absolute path, personal name, email address, numeric Discord identifier, secret, active SDK dependency/instruction, stale singular observed-model persistence contract, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative.
 
 Review status after fourth remediation: PENDING RE-REVIEW.
+
+## Fifth failed review and remediation
+
+The fifth review found two remaining overstatements and one fail-open capability path. The fourth remediation treated Claude inline settings as if they could prevent all fallback, although managed and server-managed settings outrank `--settings`; it also allowed a Windows npm `.cmd` shim into executable discovery despite the no-shell boundary. Finally, an explicit effort could be passed when the probe did not expose an allowed-values list. This report records the review as failed and corrects the prior claims.
+
+Commit `366600941188c0afc8899f3bc5a43eb3587ab37f` narrows ADR-0007, ADR-0008, the normative spec, and the implementation plan. `--settings` plus `--bare` now guarantees neutralization only of ordinary user, shared-project, and project-local fallback configuration. Managed policy may override those values, execute fallback, and incur provider work/cost. Explicit selections are validated after execution from `modelUsage`; cross-class use fails `MODEL_CLASS_CHANGED`, absent observation fails `MODEL_OBSERVATION_UNAVAILABLE`, and both retain safe audit/usage diagnostics. Provider-default remains unverified. Doctor and future README/security documentation must state the precedence and cost limitation. The ADRs cite the official Claude settings-precedence and model-configuration sources.
+
+Windows discovery now rejects every `.cmd` and `.bat` path for selection, persistence, parsing, or execution. A `%APPDATA%\npm\claude.cmd` shim is diagnostic-only. The generic native npm candidate is `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`, alongside the provider-documented native launcher. Every accepted candidate must be a regular native executable and pass a direct `<candidate> --version` call through the bounded runner. Regression tests cover shim rejection, missing targets, native candidate selection, and proof that `cmd.exe` is never invoked. Local read-only evidence found a 160-byte npm shim whose native package executable directly returned Claude Code 2.1.233; no personal absolute path is recorded.
+
+Explicit `requestedEffort` is now fail-closed: the capability probe must expose a bounded `allowedValues` list containing the exact value, or validation fails before spawn as `AGENT_EFFORT_UNSUPPORTED`. Omitted effort remains valid, and requested effort is never represented as observed effort.
+
+## Fifth-remediation verification evidence
+
+| Command                          | Result |
+| -------------------------------- | ------ |
+| `pnpm install --frozen-lockfile` | PASS; lockfile was current. |
+| `pnpm format`                    | PASS; all formatter-covered files were unchanged. |
+| `pnpm format:check`              | PASS; all matched files use Prettier style. |
+| `pnpm lint`                      | PASS; exit 0. |
+| `pnpm typecheck`                 | PASS; exit 0. |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
+| `pnpm build`                     | PASS; exit 0. |
+| `git diff --check`               | PASS; no whitespace errors. |
+
+The complete architecture diff was inspected against all fifth-review findings. Tracked-file scans found no personal absolute path, personal name, email address, numeric Discord identifier, secret, active SDK dependency/instruction, fail-open effort rule, Windows shell-shim execution path, unconditional managed-fallback prevention claim, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative.
+
+Review status after fifth remediation: PENDING RE-REVIEW.

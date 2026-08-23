@@ -10,7 +10,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Work item               | Status      | Evidence                                                                 |
 | ----------------------- | ----------- | ------------------------------------------------------------------------ |
 | Task 1: foundation      | PASS        | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass. |
-| Architecture amendments | PENDING RE-REVIEW | Four reviews failed; all remediation rounds await re-review. |
+| Architecture amendments | PENDING RE-REVIEW | Five reviews failed; all remediation rounds await re-review. |
 
 ## Pre-flight dependency scan
 
@@ -99,9 +99,11 @@ Ruling: Use phase-discriminated provider schemas rather than one generic respons
 
 Ruling: Expose allowlisted concrete provider model classes rather than abstract quality profiles or raw model strings. Config maps each class to an opaque CLI ID, optional requested effort, and bounded literal accepted-observation policy. Omission means provider default. Orchestration passes one immutable `ResolvedModelSelection` unchanged across a debate, while every run records a normalized `ModelExecution` with all observed IDs and verification — if wrong, ADR-0008 keeps the mapping reversible without changing the adapter boundary.
 
-Ruling: Claude selected-model stability means concrete class stability, not permanent alias-to-version identity. Pass inline settings that empty availability fallback and disable classifier switching; require JSON `modelUsage` for explicit selection; accept only configured literal exact IDs/prefixes; fail cross-class use or absent observations with audit-preserving errors; and store effort only as requested — if wrong, operators can narrow accepted observations to exact IDs or ADR-0008 can be revisited without weakening process isolation.
+Ruling: Claude selected-model stability is post-execution concrete-class validation, not guaranteed pre-execution fallback prevention or permanent alias-to-version identity. Inline settings neutralize ordinary user/project/local fallback configuration, but managed/server policy can override them and incur work/cost before `modelUsage` validation rejects cross-class or absent observations. Store effort only as requested — if wrong, operators can narrow accepted observations to exact IDs or ADR-0008 can be revisited without weakening process isolation.
 
-Ruling: Resolve agent executables by configured explicit path, direct `PATH` lookup, then narrow platform candidates only. Do not recursively scan home, read credentials/sessions, invoke a shell, or mutate `PATH`; setup persists a discovered path only after confirmation — if wrong, adding another provider-documented candidate is a localized resolver change with platform tests.
+Ruling: Resolve agent executables by configured explicit native path, direct native `PATH` lookup, then narrow native platform candidates only. Windows `.cmd`/`.bat` shims are diagnostic-only; accept only regular `.exe` files that pass a direct bounded-runner version probe. Do not parse shims, recursively scan home, read credentials/sessions, invoke a shell, or mutate `PATH`; setup persists a verified path only after confirmation — if wrong, adding another provider-documented native candidate is a localized resolver change with platform tests.
+
+Ruling: Treat explicit requested effort as unsupported unless the capability probe safely exposes a bounded allowed-values list containing it; fail before spawn with `AGENT_EFFORT_UNSUPPORTED`. Omitted effort remains valid — if wrong, a future official effective-effort contract can expand the capability without changing request or persistence types.
 
 ## Architecture amendment audit
 
@@ -112,6 +114,8 @@ Second review status: FAILED on 2026-08-23.
 Third review status: FAILED on 2026-08-23.
 
 Fourth review status: FAILED on 2026-08-23.
+
+Fifth review status: FAILED on 2026-08-23.
 
 Remediation status: PENDING RE-REVIEW.
 
@@ -125,8 +129,12 @@ The third remediation defines exact initial/cross-examination/final provider sch
 
 The fourth review found that model selection was not normalized across request, capabilities, result, persistence, and presentation; Claude fallback and runtime class observation were not enforced; and CLI discovery did not cover a safe executable outside the current process `PATH`. The fourth remediation adds the exact normalized model contracts, literal class-observation policy, Claude fallback-neutralizing settings and `modelUsage` verification, audit-preserving model failure codes, and portable explicit-path/PATH/narrow-candidate discovery with confirmation and platform tests.
 
-Architecture/remediation history is `8565acca7238b842076e9ee8eb0f5eed9a1a533a`, `2f25462a2fdf6f367d87c6492c1523752f5664d5`, `21d85d80e78eb1ca476ca255675577e88572ccda`, `218d8c06d67e8e49f02833da7ca926e02cab9b1e`, `83b698b3bf0f53738dd98e7dcdf244a3157b9fe6`, `12c1906cb65b697955732b0e5848a8843d2ee7d9`, `847da0a3e3128fd7cc23b3a74e63a564fd63dccc`, and `ba5bb22a45d9ef5532bd3092a8ce3f64fb898c46`. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
+The fifth review found that managed Claude settings outrank inline settings, so fallback cannot be prevented or cost-avoided at this boundary; the Windows npm command was a shell shim rather than a directly spawnable native executable; and explicit effort lacked fail-closed allowed-value validation. The fifth remediation narrows guarantees to post-execution class validation, rejects Windows `.cmd`/`.bat` while directly probing native `.exe` candidates, and requires effort membership before spawn.
+
+Architecture/remediation history is `8565acca7238b842076e9ee8eb0f5eed9a1a533a`, `2f25462a2fdf6f367d87c6492c1523752f5664d5`, `21d85d80e78eb1ca476ca255675577e88572ccda`, `218d8c06d67e8e49f02833da7ca926e02cab9b1e`, `83b698b3bf0f53738dd98e7dcdf244a3157b9fe6`, `12c1906cb65b697955732b0e5848a8843d2ee7d9`, `847da0a3e3128fd7cc23b3a74e63a564fd63dccc`, `ba5bb22a45d9ef5532bd3092a8ce3f64fb898c46`, `0e568a6c348706168cea165c5eff2774786eeafc`, and `366600941188c0afc8899f3bc5a43eb3587ab37f`. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
 
 Third-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no active abstract profile vocabulary, SDK dependency/instruction, stale active ADR link, personal identifier/path/email, project-specific sample identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004. Status remains PENDING RE-REVIEW.
 
 Fourth-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. The formatter initially encountered sandbox-denied dependency reads, then passed after the permitted rerun. Repository scans found no personal absolute path/name/email, numeric Discord identifier, secret, active SDK dependency/instruction, stale singular observed-model contract, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative. Status remains PENDING RE-REVIEW.
+
+Fifth-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no personal absolute path/name/email, numeric Discord identifier, secret, active SDK dependency/instruction, fail-open effort rule, Windows shell-shim execution path, unconditional managed-fallback prevention claim, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative. Status remains PENDING RE-REVIEW.
