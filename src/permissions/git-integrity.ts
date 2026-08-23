@@ -9,6 +9,18 @@ export interface GitIntegritySnapshot {
   dirtyPathFingerprints: string;
 }
 
+export type GitIntegrityErrorCode = "GIT_INTEGRITY_UNSUPPORTED_DIRECTORY";
+
+export class GitIntegrityError extends Error {
+  constructor(
+    public readonly code: GitIntegrityErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GitIntegrityError";
+  }
+}
+
 function runStatus(root: string): Promise<string> {
   return new Promise((resolveOutput, reject) => {
     execFile(
@@ -84,7 +96,10 @@ function sameStat(
   );
 }
 
-async function fingerprintPath(path: string): Promise<string> {
+async function fingerprintPath(
+  path: string,
+  projectPath: string,
+): Promise<string> {
   let before: Awaited<ReturnType<typeof lstat>>;
   try {
     before = await lstat(path);
@@ -92,9 +107,16 @@ async function fingerprintPath(path: string): Promise<string> {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return "missing";
     }
-    throw new Error(`Cannot inspect dirty project path: ${path}`, {
+    throw new Error(`Cannot inspect dirty project path: ${projectPath}`, {
       cause: error,
     });
+  }
+
+  if (before.isDirectory()) {
+    throw new GitIntegrityError(
+      "GIT_INTEGRITY_UNSUPPORTED_DIRECTORY",
+      `Git integrity cannot safely snapshot dirty directory: ${projectPath}. Remove or explicitly register the nested repository before running an agent.`,
+    );
   }
 
   const hash = createHash("sha256");
@@ -107,10 +129,8 @@ async function fingerprintPath(path: string): Promise<string> {
     for await (const chunk of createReadStream(path)) {
       hash.update(chunk as Buffer);
     }
-  } else if (before.isDirectory()) {
-    hash.update("directory\0");
   } else {
-    throw new Error(`Unsupported dirty project path type: ${path}`);
+    throw new Error(`Unsupported dirty project path type: ${projectPath}`);
   }
 
   let after: Awaited<ReturnType<typeof lstat>>;
@@ -118,7 +138,7 @@ async function fingerprintPath(path: string): Promise<string> {
     after = await lstat(path);
   } catch (error: unknown) {
     throw new Error(
-      `Dirty project path changed while being inspected: ${path}`,
+      `Dirty project path changed while being inspected: ${projectPath}`,
       {
         cause: error,
       },
@@ -126,7 +146,7 @@ async function fingerprintPath(path: string): Promise<string> {
   }
   if (!sameStat(before, after)) {
     throw new Error(
-      `Dirty project path changed while being inspected: ${path}`,
+      `Dirty project path changed while being inspected: ${projectPath}`,
     );
   }
   return hash.digest("hex");
@@ -138,7 +158,7 @@ async function captureFingerprints(
 ): Promise<string> {
   const fingerprints: Array<readonly [string, string]> = [];
   for (const path of dirtyPaths(porcelainV2)) {
-    fingerprints.push([path, await fingerprintPath(resolve(root, path))]);
+    fingerprints.push([path, await fingerprintPath(resolve(root, path), path)]);
   }
   return JSON.stringify(fingerprints);
 }

@@ -1,5 +1,12 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, parse, relative } from "node:path";
 import { promisify } from "node:util";
@@ -42,6 +49,7 @@ async function writeConflictStages(
   root: string,
   trackedPath: string,
   targets: readonly [string, string, string],
+  mode = "120000",
 ): Promise<void> {
   const objectIds: string[] = [];
   for (const [index, target] of targets.entries()) {
@@ -59,7 +67,7 @@ async function writeConflictStages(
   const input = objectIds
     .map(
       (objectId, index) =>
-        `120000 ${objectId} ${String(index + 1)}\t${trackedPath}\0`,
+        `${mode} ${objectId} ${String(index + 1)}\t${trackedPath}\0`,
     )
     .join("");
   await new Promise<void>((resolveInput, reject) => {
@@ -217,6 +225,49 @@ describe("validateProjectRoot", () => {
     });
   });
 
+  it("rejects a tracked regular file replaced by an external worktree link", async () => {
+    const root = await createRepository();
+    const trackedPath = join(root, "tracked-entry");
+    const external = await mkdtemp(join(tmpdir(), "ai-workspace-external-"));
+    await writeFile(trackedPath, "tracked", "utf8");
+    await execute("git", ["-C", root, "add", "tracked-entry"]);
+    await rm(trackedPath);
+    try {
+      await symlink(external, trackedPath, "junction");
+    } catch (error: unknown) {
+      if (linkPermissionDenied(error)) {
+        return;
+      }
+      throw error;
+    }
+
+    await expect(validateProjectRoot(root)).rejects.toMatchObject({
+      code: "PROJECT_EXTERNAL_SYMLINK",
+    });
+  });
+
+  it("accepts a tracked regular file replaced by a safe internal link", async () => {
+    const root = await createRepository();
+    const trackedPath = join(root, "tracked-entry");
+    const internal = join(root, "internal-target");
+    await mkdir(internal);
+    await writeFile(trackedPath, "tracked", "utf8");
+    await execute("git", ["-C", root, "add", "tracked-entry"]);
+    await rm(trackedPath);
+    try {
+      await symlink(internal, trackedPath, "junction");
+    } catch (error: unknown) {
+      if (linkPermissionDenied(error)) {
+        return;
+      }
+      throw error;
+    }
+
+    await expect(validateProjectRoot(root)).resolves.toMatchObject({
+      root: await realpath(root),
+    });
+  });
+
   it("rejects an effective external worktree link at an unmerged path", async () => {
     const root = await createRepository();
     const external = await mkdtemp(join(tmpdir(), "ai-workspace-external-"));
@@ -227,6 +278,29 @@ describe("validateProjectRoot", () => {
     ]);
     try {
       await symlink(external, join(root, "conflicted-link"), "junction");
+    } catch (error: unknown) {
+      if (linkPermissionDenied(error)) {
+        return;
+      }
+      throw error;
+    }
+
+    await expect(validateProjectRoot(root)).rejects.toMatchObject({
+      code: "PROJECT_EXTERNAL_SYMLINK",
+    });
+  });
+
+  it("rejects an external worktree link at an unmerged regular path", async () => {
+    const root = await createRepository();
+    const external = await mkdtemp(join(tmpdir(), "ai-workspace-external-"));
+    await writeConflictStages(
+      root,
+      "conflicted-entry",
+      ["base", "ours", "theirs"],
+      "100644",
+    );
+    try {
+      await symlink(external, join(root, "conflicted-entry"), "junction");
     } catch (error: unknown) {
       if (linkPermissionDenied(error)) {
         return;

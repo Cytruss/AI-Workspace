@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -144,6 +144,33 @@ describe("Git integrity", () => {
     expect(() => {
       assertGitIntegrityUnchanged(before, after);
     }).toThrow("Git integrity changed during the agent run");
+  });
+
+  it("fingerprints ordinary untracked directory contents per file", async () => {
+    const root = await createCommittedRepository();
+    const directory = join(root, "ordinary-directory");
+    await mkdir(directory);
+    await writeFile(join(directory, "untracked.txt"), "first", "utf8");
+    const before = await captureGitIntegrity(root);
+    await writeFile(join(directory, "untracked.txt"), "other", "utf8");
+    const after = await captureGitIntegrity(root);
+
+    expect(() => {
+      assertGitIntegrityUnchanged(before, after);
+    }).toThrow("Git integrity changed during the agent run");
+  });
+
+  it("fails closed when Git collapses an untracked nested repository to a directory", async () => {
+    const root = await createCommittedRepository();
+    const nested = join(root, "nested-repository");
+    await execute("git", ["init", "--quiet", nested]);
+    await writeFile(join(nested, "nested.txt"), "content", "utf8");
+
+    await expect(captureGitIntegrity(root)).rejects.toHaveProperty(
+      "code",
+      "GIT_INTEGRITY_UNSUPPORTED_DIRECTORY",
+    );
+    await expect(captureGitIntegrity(root)).rejects.toThrow("dirty directory");
   });
 
   it("detects changes to an already staged file", async () => {

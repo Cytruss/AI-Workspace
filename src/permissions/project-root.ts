@@ -189,8 +189,9 @@ async function assertEffectiveWorktreeLinkInside(
 
 async function assertTrackedSymlinksStayInside(root: string): Promise<void> {
   const entries = await readIndexEntries(root);
-  const effectivePaths = new Set<string>();
+  const trackedPaths = new Set<string>();
   for (const entry of entries) {
+    trackedPaths.add(entry.path);
     if (entry.mode === "120000") {
       const storedTarget = await runGitBuffer(root, [
         "cat-file",
@@ -198,11 +199,10 @@ async function assertTrackedSymlinksStayInside(root: string): Promise<void> {
         entry.objectId,
       ]);
       await assertTargetInside(root, entry.path, storedTarget);
-      effectivePaths.add(entry.path);
     }
   }
-  for (const linkPath of effectivePaths) {
-    await assertEffectiveWorktreeLinkInside(root, linkPath);
+  for (const trackedPath of trackedPaths) {
+    await assertEffectiveWorktreeLinkInside(root, trackedPath);
   }
 }
 
