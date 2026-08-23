@@ -1,7 +1,15 @@
 import { execFile } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { lstat, readlink, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
 export interface ValidatedProjectRoot {
   root: string;
@@ -41,6 +49,28 @@ function runGit(root: string, arguments_: readonly string[]): Promise<string> {
   });
 }
 
+function runGitBuffer(
+  root: string,
+  arguments_: readonly string[],
+): Promise<Buffer> {
+  return new Promise((resolveOutput, reject) => {
+    execFile(
+      "git",
+      ["-C", root, ...arguments_],
+      { encoding: "buffer", maxBuffer: 10 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error !== null) {
+          reject(
+            error instanceof Error ? error : new Error("Git command failed"),
+          );
+          return;
+        }
+        resolveOutput(stdout);
+      },
+    );
+  });
+}
+
 function pathsEqual(first: string, second: string): boolean {
   return relative(first, second) === "";
 }
@@ -56,53 +86,123 @@ function isInside(root: string, target: string): boolean {
 }
 
 async function canonicalizeTarget(target: string): Promise<string> {
-  try {
-    return await realpath(target);
-  } catch (error: unknown) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-    ) {
-      return target;
+  const suffix: string[] = [];
+  let candidate = target;
+  for (;;) {
+    try {
+      const canonicalAncestor = await realpath(candidate);
+      return resolve(canonicalAncestor, ...suffix);
+    } catch (error: unknown) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        (error.code === "ENOENT" || error.code === "ENOTDIR")
+      )) {
+        throw error;
+      }
+      const parent = dirname(candidate);
+      if (parent === candidate) {
+        throw error;
+      }
+      suffix.unshift(basename(candidate));
+      candidate = parent;
     }
-    throw error;
   }
 }
 
-async function assertTrackedSymlinksStayInside(root: string): Promise<void> {
-  const index = await runGit(root, ["ls-files", "--stage", "-z"]);
-  const links: string[] = [];
+function decodeLinkTarget(target: Buffer): string {
+  if (target.length === 0 || target.includes(0)) {
+    throw new Error("Git-tracked symbolic link has a malformed target");
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(target);
+}
+
+interface IndexEntry {
+  mode: string;
+  objectId: string;
+  stage: string;
+  path: string;
+}
+
+async function readIndexEntries(root: string): Promise<IndexEntry[]> {
+  const index = new TextDecoder("utf-8", { fatal: true }).decode(
+    await runGitBuffer(root, ["ls-files", "--stage", "-z"]),
+  );
+  const entries: IndexEntry[] = [];
   for (const record of index.split("\0")) {
-    const tab = record.indexOf("\t");
-    if (tab === -1) {
+    if (record === "") {
       continue;
     }
-    const metadata = record.slice(0, tab).split(" ");
-    if (metadata[0] === "120000" && metadata[2] === "0") {
-      links.push(record.slice(tab + 1));
+    const tab = record.indexOf("\t");
+    const match = /^(\d{6}) ([0-9a-f]+) ([0-3])$/.exec(
+      tab === -1 ? "" : record.slice(0, tab),
+    );
+    if (tab === -1 || match === null) {
+      throw new Error("Git returned a malformed index entry");
+    }
+    entries.push({
+      mode: match[1] ?? "",
+      objectId: match[2] ?? "",
+      stage: match[3] ?? "",
+      path: record.slice(tab + 1),
+    });
+  }
+  return entries;
+}
+
+async function assertTargetInside(
+  root: string,
+  linkPath: string,
+  storedTarget: Buffer,
+): Promise<void> {
+  const linkTarget = decodeLinkTarget(storedTarget);
+  const target = resolve(root, dirname(linkPath), linkTarget);
+  const canonicalTarget = await canonicalizeTarget(target);
+  if (!isInside(root, canonicalTarget)) {
+    throw new ProjectRootError(
+      "PROJECT_EXTERNAL_SYMLINK",
+      "Project root contains a Git-tracked symbolic link outside the project root",
+    );
+  }
+}
+
+async function assertEffectiveWorktreeLinkInside(
+  root: string,
+  linkPath: string,
+): Promise<void> {
+  const path = resolve(root, linkPath);
+  let status: Awaited<ReturnType<typeof lstat>>;
+  try {
+    status = await lstat(path);
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  if (!status.isSymbolicLink()) {
+    return;
+  }
+  const target = await readlink(path, { encoding: "buffer" });
+  await assertTargetInside(root, linkPath, target);
+}
+
+async function assertTrackedSymlinksStayInside(root: string): Promise<void> {
+  const entries = await readIndexEntries(root);
+  const effectivePaths = new Set<string>();
+  for (const entry of entries) {
+    if (entry.mode === "120000") {
+      const storedTarget = await runGitBuffer(root, [
+        "cat-file",
+        "blob",
+        entry.objectId,
+      ]);
+      await assertTargetInside(root, entry.path, storedTarget);
+      effectivePaths.add(entry.path);
     }
   }
-
-  for (const link of links) {
-    const storedTarget = await runGit(root, ["cat-file", "blob", `:${link}`]);
-    const target = resolve(root, dirname(link), storedTarget);
-    let canonicalTarget: string;
-    try {
-      canonicalTarget = await canonicalizeTarget(target);
-    } catch (error: unknown) {
-      throw new ProjectRootError(
-        "PROJECT_ROOT_INVALID",
-        "Project root contains an unreadable Git-tracked symbolic link",
-        { cause: error },
-      );
-    }
-    if (!isInside(root, canonicalTarget)) {
-      throw new ProjectRootError(
-        "PROJECT_EXTERNAL_SYMLINK",
-        "Project root contains a Git-tracked symbolic link outside the project root",
-      );
-    }
+  for (const linkPath of effectivePaths) {
+    await assertEffectiveWorktreeLinkInside(root, linkPath);
   }
 }
 
