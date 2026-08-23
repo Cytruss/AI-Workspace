@@ -431,6 +431,14 @@ export class SessionRepository {
       throw new Error(
         "Agent output boards may be linked only after response persistence",
       );
+    const debatePhase = input.phase !== "ask";
+    if (debatePhase && input.roundId === undefined)
+      throw new Error("Debate-phase agent runs require a debate round");
+    if (
+      !debatePhase &&
+      (input.roundId !== undefined || input.inputBoardId !== undefined)
+    )
+      throw new Error("Ask agent runs cannot link debate rounds or boards");
     const requestJson = providerEnvelopeJson(
       input.request,
       input.phase,
@@ -520,6 +528,20 @@ export class SessionRepository {
       .prepare("SELECT * FROM agent_runs WHERE id = ?")
       .get(id) as RunRow | undefined;
     if (row === undefined) throw new Error(`Agent run not found: ${id}`);
+    const debatePhase = new Set(["initial", "cross_examination", "final"]).has(
+      row.phase,
+    );
+    if (
+      (!debatePhase && row.phase !== "ask") ||
+      (debatePhase && row.round_id === null) ||
+      (row.phase === "ask" &&
+        (row.round_id !== null ||
+          row.input_board_id !== null ||
+          row.output_board_id !== null))
+    )
+      throw new StorageCorruptionError(
+        `Agent run ${row.id} violates its phase linkage contract`,
+      );
     const observed = parseStoredJson(
       row.observed_model_ids_json,
       "Observed model IDs",

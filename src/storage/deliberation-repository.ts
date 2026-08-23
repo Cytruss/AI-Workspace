@@ -782,7 +782,21 @@ export class DeliberationRepository {
   }
 
   private assertPersistedRunRound(run: AgentRunRecord): void {
-    if (run.roundId === undefined) return;
+    if (run.phase === "ask") {
+      if (
+        run.roundId !== undefined ||
+        run.inputBoardId !== undefined ||
+        run.outputBoardId !== undefined
+      )
+        throw new StorageCorruptionError(
+          `Agent run ${run.id} violates its ask phase contract`,
+        );
+      return;
+    }
+    if (run.roundId === undefined)
+      throw new StorageCorruptionError(
+        `Debate-phase agent run ${run.id} is missing its debate round`,
+      );
     const round = this.database
       .prepare(
         "SELECT session_id, phase, input_board_id, output_board_id, status FROM debate_rounds WHERE id=?",

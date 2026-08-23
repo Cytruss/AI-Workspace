@@ -64,20 +64,20 @@ describe("project and session repositories", () => {
       id: "default-run",
       sessionId: session.id,
       agentId: "codex",
-      phase: "initial",
-      purpose: "draft",
+      phase: "ask",
+      purpose: "answer",
       modelExecution: {
         observedModelIds: ["gpt-default"],
         verification: "unverified",
       },
-      request: { phase: "initial" },
+      request: { phase: "ask" },
     });
     sessions.createAgentRun({
       id: "explicit-run",
       sessionId: session.id,
       agentId: "claude",
-      phase: "final",
-      purpose: "position",
+      phase: "ask",
+      purpose: "answer",
       modelExecution: {
         requestedClass: "sonnet",
         requestedCliModelId: "claude-sonnet",
@@ -85,12 +85,12 @@ describe("project and session repositories", () => {
         observedModelIds: ["claude-sonnet-5"],
         verification: "verified",
       },
-      request: { phase: "final" },
+      request: { phase: "ask" },
     });
     sessions.finishAgentRun({
       id: "explicit-run",
       status: "completed",
-      response: { phase: "final", stances: [] },
+      response: { phase: "ask", stances: [] },
       exitCode: 0,
       diagnostics: { safe: true },
     });
@@ -179,15 +179,15 @@ describe("project and session repositories", () => {
       id: "mismatch",
       sessionId: session.id,
       agentId: "claude",
-      phase: "initial",
-      purpose: "draft",
+      phase: "ask",
+      purpose: "answer",
       modelExecution: {
         requestedClass: "sonnet",
         requestedCliModelId: "sonnet-alias",
         observedModelIds: ["opus-5"],
         verification: "unverified",
       },
-      request: { phase: "initial" },
+      request: { phase: "ask" },
     });
     sessions.finishAgentRun({
       id: "mismatch",
@@ -247,6 +247,15 @@ describe("project and session repositories", () => {
         request: { phase: "ask", body: "x".repeat(1_048_577) },
       });
     }).toThrow(/bytes/i);
+    expect(() => {
+      sessions.createAgentRun({
+        ...base,
+        id: "unlinked-debate",
+        phase: "initial",
+        purpose: "draft",
+        request: { phase: "initial" },
+      });
+    }).toThrow(/round/i);
     expect(
       database.prepare("SELECT COUNT(*) AS count FROM agent_runs").get(),
     ).toEqual({ count: 0 });

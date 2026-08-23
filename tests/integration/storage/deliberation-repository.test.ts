@@ -357,10 +357,10 @@ describe("deliberation persistence", () => {
         id,
         sessionId: session.id,
         agentId: agent,
-        phase: "initial",
-        purpose: "draft",
+        phase: "ask",
+        purpose: "answer",
         modelExecution: { observedModelIds: [], verification: "unverified" },
-        request: { phase: "initial" },
+        request: { phase: "ask" },
       });
     deliberations.addClaim({
       boardId: board.id,
@@ -478,10 +478,10 @@ describe("deliberation persistence", () => {
         id,
         sessionId: session.id,
         agentId: agent,
-        phase: "initial",
-        purpose: "draft",
+        phase: "ask",
+        purpose: "answer",
         modelExecution: { observedModelIds: [], verification: "unverified" },
-        request: { phase: "initial" },
+        request: { phase: "ask" },
       });
     deliberations.addEvidenceReference({
       boardId: board.id,
@@ -956,10 +956,10 @@ describe("deliberation persistence", () => {
       id: "other-run",
       sessionId: second.id,
       agentId: "codex",
-      phase: "initial",
-      purpose: "draft",
+      phase: "ask",
+      purpose: "answer",
       modelExecution: { observedModelIds: [], verification: "unverified" },
-      request: { phase: "initial" },
+      request: { phase: "ask" },
     });
     const round = first.deliberations.createRound({
       sessionId: first.session.id,
@@ -1515,10 +1515,10 @@ describe("deliberation persistence", () => {
       id: "other-run",
       sessionId: second.id,
       agentId: "codex",
-      phase: "initial",
-      purpose: "draft",
+      phase: "ask",
+      purpose: "answer",
       modelExecution: { observedModelIds: [], verification: "unverified" },
-      request: { phase: "initial" },
+      request: { phase: "ask" },
     });
     expect(() => {
       first.database
@@ -1642,6 +1642,194 @@ describe("deliberation persistence", () => {
     expect(
       database.prepare("SELECT COUNT(*) AS count FROM final_positions").get(),
     ).toEqual({ count: 0 });
+    database.close();
+  });
+
+  test("database makes agent-run identity and finalized output links immutable", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const inputBoard = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [] },
+    });
+    const outputBoard = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 2,
+      payload: { claims: [] },
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "final",
+      status: "running",
+      inputBoardId: inputBoard.id,
+    });
+    sessions.createAgentRun({
+      id: "immutable-run",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: inputBoard.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    sessions.finishAgentRun({
+      id: "immutable-run",
+      status: "completed",
+      response: { phase: "final" },
+      diagnostics: {},
+    });
+    deliberations.finishRound(round.id, "completed", outputBoard.id);
+
+    for (const [column, value] of [
+      ["round_id", null],
+      ["input_board_id", null],
+      ["phase", "initial"],
+      ["session_id", "missing-session"],
+      ["purpose", "changed"],
+      ["output_board_id", null],
+      ["output_board_id", inputBoard.id],
+    ] as const) {
+      expect(() =>
+        database
+          .prepare(`UPDATE agent_runs SET ${column}=? WHERE id=?`)
+          .run(value, "immutable-run"),
+      ).toThrow();
+    }
+    expect(() =>
+      database
+        .prepare("UPDATE debate_rounds SET output_board_id=NULL WHERE id=?")
+        .run(round.id),
+    ).toThrow();
+    expect(() =>
+      database
+        .prepare("UPDATE debate_rounds SET output_board_id=? WHERE id=?")
+        .run(inputBoard.id, round.id),
+    ).toThrow();
+
+    expect(sessions.getAgentRun("immutable-run")).toMatchObject({
+      sessionId: session.id,
+      roundId: round.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: inputBoard.id,
+      outputBoardId: outputBoard.id,
+    });
+    database.close();
+  });
+
+  test("database accepts an unlinked ask run and matching output-link finalization", () => {
+    const { database, sessions, session, deliberations } = setup();
+    database
+      .prepare(
+        `INSERT INTO agent_runs
+          (id,session_id,agent_id,requested_model_class,requested_model_id,requested_effort,
+           observed_model_ids_json,model_verification,round_id,phase,purpose,input_board_id,
+           output_board_id,request_json,response_json,status,exit_code,duration_ms,
+           diagnostics_json,created_at,finished_at)
+         VALUES (?,?,?,NULL,NULL,NULL,?,'unverified',NULL,'ask',?,NULL,NULL,?,NULL,
+                 'running',NULL,0,?,?,NULL)`,
+      )
+      .run(
+        "ask-run",
+        session.id,
+        "codex",
+        "[]",
+        "answer",
+        JSON.stringify({ phase: "ask" }),
+        "{}",
+        new Date().toISOString(),
+      );
+    expect(sessions.getAgentRun("ask-run")).toMatchObject({
+      phase: "ask",
+      purpose: "answer",
+      status: "running",
+    });
+
+    const inputBoard = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [] },
+    });
+    const outputBoard = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 2,
+      payload: { claims: [] },
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "final",
+      status: "running",
+      inputBoardId: inputBoard.id,
+    });
+    sessions.createAgentRun({
+      id: "finalizing-run",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "final",
+      purpose: "position",
+      inputBoardId: inputBoard.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    sessions.finishAgentRun({
+      id: "finalizing-run",
+      status: "completed",
+      response: { phase: "final" },
+      diagnostics: {},
+    });
+    database
+      .prepare(
+        "UPDATE debate_rounds SET status='completed', output_board_id=?, finished_at=? WHERE id=?",
+      )
+      .run(outputBoard.id, new Date().toISOString(), round.id);
+    database
+      .prepare("UPDATE agent_runs SET output_board_id=? WHERE id=?")
+      .run(outputBoard.id, "finalizing-run");
+    expect(sessions.getAgentRun("finalizing-run").outputBoardId).toBe(
+      outputBoard.id,
+    );
+    database.close();
+  });
+
+  test("load reports a legacy debate run whose round link is missing as corruption", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [] },
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "initial",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    sessions.createAgentRun({
+      id: "legacy-run",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "initial",
+      purpose: "draft",
+      inputBoardId: board.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "initial" },
+    });
+
+    database.exec("DROP TRIGGER IF EXISTS agent_runs_identity_immutable");
+    database.pragma("ignore_check_constraints = ON");
+    database
+      .prepare("UPDATE agent_runs SET round_id=NULL WHERE id=?")
+      .run("legacy-run");
+    database.pragma("ignore_check_constraints = OFF");
+
+    expect(() => deliberations.load(session.id)).toThrow(/corrupt/i);
     database.close();
   });
 });
