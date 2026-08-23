@@ -11,11 +11,14 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | ----------------------- | ------ | -------------------------------------------------------------------------------- |
 | Task 1: foundation      | PASS   | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass.         |
 | Task 2: configuration   | PASS   | Re-review accepted `168b9f0` and `b37f38a`; all findings addressed, no new Critical or Important issues. |
+| Task 3: project guard   | FAIL   | Initial review found one Critical and three Important security gaps; fix round 1 is complete and pending scoped re-review. |
 | Architecture amendments | PASS   | Fifth re-review accepted all remediation; no new Critical or Important findings. |
 
 Task 2: fix round 1/5 — reviewer found post-rename chmod could report failure after commit and chmod/cleanup errors were not correctly classified or preserved. Commit `b37f38a` makes destination rename the last fallible successful-path mutation, tolerates only documented unsupported/permission-denied POSIX chmod codes, rethrows unexpected chmod failures, and preserves primary write/chmod/rename errors if exact-temp cleanup fails. RED: 9 expected failures. GREEN: 27/27 regression tests; focused 32/32; full 33/33 with build, lint, typecheck, format check, and `git diff --check` clean. Status pending scoped re-review, not PASS.
 
 Task 2: complete — scoped re-review PASS; all findings addressed, with no new Critical or Important issues. Implementation commits: `168b9f0` and `b37f38a`.
+
+Task 3: fix round 1/5 — initial review found status-only integrity snapshots, stage-0-only index-link validation, unchecked effective worktree links, and lexical fallback for dangling targets. Commit `9f6cfb5` adds deterministic SHA-256 content/type/link-target fingerprints for every NUL-delimited dirty tracked/untracked path; covers staged, unstaged, rename, conflict, restored-content, odd-name, and link cases; validates every index symlink OID across stages 0–3; checks effective tracked/unmerged worktree links; and canonicalizes dangling targets through the nearest existing real ancestor. RED: expected dirty-content, conflict-stage, effective-link, and junction-ancestor regressions failed; the corrected conflict fixture independently failed before implementation. GREEN: focused 27/27 and full 60/60 with lint, typecheck, build, format check, and `git diff --check` clean. Status remains FAIL pending scoped re-review, not PASS.
 
 ## Pre-flight dependency scan
 
