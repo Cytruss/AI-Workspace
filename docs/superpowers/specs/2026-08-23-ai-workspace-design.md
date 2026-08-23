@@ -100,7 +100,11 @@ interface AgentAdapter {
 
 Each adapter owns executable discovery, arguments, structured-output parsing, and provider-specific permission settings. Setup records detected capabilities, but every run validates critical read-only capabilities again so an upgraded or replaced executable cannot silently weaken policy.
 
-Both adapters invoke their separately installed CLIs through the bounded process runner. Codex requires `exec`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox read-only`, and `--cd` or `-C`. Claude requires non-interactive JSON or JSON-schema output, supported tool restrictions, disabled session persistence, and a plan/read-only permission mode. AI Workspace refuses an `OBSERVE` run when any required safety or structured-output capability is absent.
+Both adapters invoke their separately installed CLIs through the bounded process runner, as decided in [ADR-0007](../../decisions/0007-hardened-local-agent-clis.md). Codex requires `exec`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox read-only`, and `--cd` or `-C`. It receives a restrictive JSON Schema through a private temporary file path.
+
+Claude requires `--bare`, `--tools "Read,Glob,Grep"`, `--disallowedTools "mcp__*"`, `--permission-mode plan`, `--no-session-persistence`, `-p`, `--output-format json`, and `--json-schema <compact-inline-json>`. `--bare` disables discovered MCP servers and customizations, while explicit MCP denial is defense in depth. Bash, Edit, Write, Notebook, and every built-in tool other than Read, Glob, and Grep are unavailable. The compact schema JSON is bounded and passed inline as one argument; it is never written to the Codex schema file or interpreted by a shell.
+
+Capability and minimum-version probing independently verifies every essential provider flag and fails closed if any safety, customization-isolation, MCP-denial, session-persistence, or structured-output capability is absent.
 
 ## Configuration and Local Data
 
@@ -165,6 +169,8 @@ The deliberation engine owns a shared claim board and uses stable schemas for cl
 Codex and Claude receive the same project, topic, evidence rules, and response schema concurrently. Neither receives the other's response. Each independently returns material claims with provider-local claim references, evidence references, assumptions, risks, and a proposed position. Providers never assign canonical claim IDs.
 
 After deterministic normalization and sorting, the orchestrator assigns monotonically ordered canonical IDs such as `claim-0001`. Exact normalized duplicates merge into one canonical claim while retaining every origin as `(agent, run, provider-local claim reference)` provenance. Provider-local reference collisions within a run fail schema validation.
+
+Provider evidence IDs are also local only. After claim canonicalization, host code sorts evidence by a deterministic tuple of normalized tracked path, line range, expected content hash, agent ID, run ID, and provider-local evidence ID, then assigns `evidence-0001`, `evidence-0002`, and so on. Mechanically identical path/range/hash references merge while preserving every `(agent, run, provider-local evidence ID)` origin. Host code translates every claim-to-evidence and stance-to-evidence reference to canonical IDs. Cross-provider reuse of the same local ID is harmless; collisions within one provider run fail validation. Invalid and missing references remain canonical auditable records rather than being discarded.
 
 ### Shared claim board and cross-examination
 
@@ -235,7 +241,9 @@ SQLite is stored in the per-user application-data directory and migrated transac
 - `claim_boards`: immutable versioned snapshots with bounded serialized payloads, byte lengths, and content hashes.
 - `claims`: canonical claims keyed within a board snapshot.
 - `claim_origins`: many-to-one provenance from a canonical claim to agent, run, and provider-local claim reference.
-- `evidence_references`: tracked in-root path plus line/hash reference and mechanical `VERIFIED`, `INVALID`, or `MISSING` resolution.
+- `evidence_references`: canonical evidence IDs, tracked in-root path plus line/hash reference, and mechanical `VERIFIED`, `INVALID`, or `MISSING` resolution.
+- `evidence_origins`: many-to-one provenance from canonical evidence to agent, run, and provider-local evidence ID.
+- `claim_evidence` and `stance_evidence`: translated canonical many-to-many links from claims and stances to evidence.
 - `debate_rounds`: phase, ordering, completion state, and foreign keys to exact input and output board snapshots.
 - `agent_runs`: adapter, round, phase/purpose, exact bounded request/response payloads, input/output board references, status, duration, exit metadata, and bounded diagnostics.
 - `stances`: `ACCEPT`, `DISPUTE`, or `UNCERTAIN` audit-history records linked to the producing run, round, and canonical claim.
@@ -261,7 +269,7 @@ Long-term semantic memory for facts, hypotheses, experiments, decisions, rejecte
 
 Vitest is used for unit and integration tests. Fake Node-based agent executables simulate successful structured output, streaming output, malformed data, authentication failures, non-zero exits, hangs, oversized output, ignored termination signals, and spawned child processes.
 
-Unit tests cover configuration bounds, authorization, path validation, canonical claim assignment and collisions, deliberation state transitions, the exhaustive verdict matrix, mechanical evidence resolution, immutable polishing checks, bounded context, error mapping, formatting, and redaction. Integration tests cover SQLite migrations and complete call reconstruction, process-tree cancellation, timeouts, output limits, and both CLI adapters' structured output. Discord tests use a transport boundary rather than a live server.
+Unit tests cover configuration bounds, authorization, path validation, canonical claim/evidence assignment, cross-provider ID reuse, within-run collisions, duplicate merges and origin preservation, local-to-canonical translation, deliberation state transitions, the exhaustive verdict matrix, mechanical evidence resolution, immutable polishing checks, bounded context, error mapping, formatting, and redaction. Integration tests cover SQLite migrations and complete call reconstruction, ambient MCP denial, process-tree cancellation, timeouts, output limits, and both CLI adapters' structured output and distinct schema transports. Discord tests use a transport boundary rather than a live server.
 
 CI runs on Windows, macOS, and Linux using the supported Node version. Tests requiring real accounts are opt-in smoke tests and never run in public CI. Release checks include formatting, linting, type checking, unit tests, integration tests, secret scanning, and a clean install from a fresh clone.
 
