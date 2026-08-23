@@ -861,6 +861,17 @@ export class DeliberationRepository {
         .all(sessionId) as { id: string }[]
     ).map(({ id }) => this.sessions.getAgentRun(id));
     for (const run of runs) this.assertPersistedRunRound(run);
+    const runsById = new Map(runs.map((run) => [run.id, run]));
+    const assertProducerAgent = (
+      label: string,
+      runId: string,
+      agentId: string,
+    ): void => {
+      if (runsById.get(runId)?.agentId !== agentId)
+        throw new StorageCorruptionError(
+          `${label} diverges from its producing agent run`,
+        );
+    };
     const claims = (
       this.database
         .prepare(
@@ -895,16 +906,17 @@ export class DeliberationRepository {
         agent_run_id: string;
         provider_local_id: string;
       }[]
-    ).map((r) =>
-      Object.freeze({
+    ).map((r) => {
+      assertProducerAgent(`Claim origin ${r.id}`, r.agent_run_id, r.agent_id);
+      return Object.freeze({
         id: r.id,
         boardId: r.board_id,
         canonicalClaimId: r.canonical_claim_id,
         agentId: r.agent_id,
         agentRunId: r.agent_run_id,
         providerLocalId: r.provider_local_id,
-      }),
-    );
+      });
+    });
     const evidenceReferences = (
       this.database
         .prepare(
@@ -948,8 +960,13 @@ export class DeliberationRepository {
         agent_run_id: string;
         provider_local_id: string;
       }[]
-    ).map((r) =>
-      Object.freeze({
+    ).map((r) => {
+      assertProducerAgent(
+        `Evidence origin ${r.id}`,
+        r.agent_run_id,
+        r.agent_id,
+      );
+      return Object.freeze({
         id: r.id,
         boardId: r.board_id,
         sessionId: r.session_id,
@@ -957,8 +974,8 @@ export class DeliberationRepository {
         agentId: r.agent_id,
         agentRunId: r.agent_run_id,
         providerLocalId: r.provider_local_id,
-      }),
-    );
+      });
+    });
     const claimEvidence = (
       this.database
         .prepare(
@@ -991,8 +1008,9 @@ export class DeliberationRepository {
         stance: StanceValue;
         reasoning: string;
       }[]
-    ).map((r) =>
-      Object.freeze({
+    ).map((r) => {
+      assertProducerAgent(`Stance ${r.id}`, r.agent_run_id, r.agent_id);
+      return Object.freeze({
         id: r.id,
         boardId: r.board_id,
         canonicalClaimId: r.canonical_claim_id,
@@ -1001,8 +1019,8 @@ export class DeliberationRepository {
         agentId: r.agent_id,
         stance: r.stance,
         reasoning: r.reasoning,
-      }),
-    );
+      });
+    });
     const stanceEvidence = (
       this.database
         .prepare(
@@ -1037,6 +1055,7 @@ export class DeliberationRepository {
         created_at: string;
       }[]
     ).map((r) => {
+      assertProducerAgent(`Final position ${r.id}`, r.agent_run_id, r.agent_id);
       const finalStances = this.database
         .prepare(
           "SELECT board_id, canonical_claim_id, stance FROM final_stances WHERE final_position_id=? ORDER BY canonical_claim_id",
@@ -1109,6 +1128,18 @@ export class DeliberationRepository {
         created_at: string;
       }[]
     ).map((r) => {
+      if (r.codex_run_id !== null)
+        assertProducerAgent(
+          `Verdict ${r.id} Codex run`,
+          r.codex_run_id,
+          "codex",
+        );
+      if (r.claude_run_id !== null)
+        assertProducerAgent(
+          `Verdict ${r.id} Claude run`,
+          r.claude_run_id,
+          "claude",
+        );
       const verdict = parseImmutableJson(r.verdict_json, `Verdict ${r.id}`);
       if (
         hash(

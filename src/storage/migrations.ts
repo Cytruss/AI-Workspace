@@ -31,9 +31,14 @@ CREATE TRIGGER debate_rounds_run_output_update BEFORE UPDATE OF output_board_id 
 const IMMUTABLE_LINK_TRIGGERS = `
 CREATE TRIGGER IF NOT EXISTS agent_runs_phase_link_insert BEFORE INSERT ON agent_runs WHEN (NEW.phase='ask' AND (NEW.round_id IS NOT NULL OR NEW.input_board_id IS NOT NULL OR NEW.output_board_id IS NOT NULL)) OR (NEW.phase IN ('initial','cross_examination','final') AND NEW.round_id IS NULL) BEGIN SELECT RAISE(ABORT, 'agent run phase linkage mismatch'); END;
 CREATE TRIGGER IF NOT EXISTS agent_runs_phase_link_update BEFORE UPDATE OF output_board_id ON agent_runs WHEN NEW.phase='ask' AND NEW.output_board_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'agent run phase linkage mismatch'); END;
-CREATE TRIGGER IF NOT EXISTS agent_runs_identity_immutable BEFORE UPDATE OF session_id,phase,purpose,round_id,input_board_id ON agent_runs WHEN NEW.session_id IS NOT OLD.session_id OR NEW.phase IS NOT OLD.phase OR NEW.purpose IS NOT OLD.purpose OR NEW.round_id IS NOT OLD.round_id OR NEW.input_board_id IS NOT OLD.input_board_id BEGIN SELECT RAISE(ABORT, 'agent run identity is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS agent_runs_identity_immutable BEFORE UPDATE OF session_id,agent_id,phase,purpose,round_id,input_board_id ON agent_runs WHEN NEW.session_id IS NOT OLD.session_id OR NEW.agent_id IS NOT OLD.agent_id OR NEW.phase IS NOT OLD.phase OR NEW.purpose IS NOT OLD.purpose OR NEW.round_id IS NOT OLD.round_id OR NEW.input_board_id IS NOT OLD.input_board_id BEGIN SELECT RAISE(ABORT, 'agent run identity is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS agent_runs_output_write_once BEFORE UPDATE OF output_board_id ON agent_runs WHEN OLD.output_board_id IS NOT NULL AND NEW.output_board_id IS NOT OLD.output_board_id BEGIN SELECT RAISE(ABORT, 'agent run output board is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS debate_rounds_output_write_once BEFORE UPDATE OF output_board_id ON debate_rounds WHEN OLD.output_board_id IS NOT NULL AND NEW.output_board_id IS NOT OLD.output_board_id BEGIN SELECT RAISE(ABORT, 'debate round output board is immutable'); END;
+`;
+
+const PROVIDER_IDENTITY_TRIGGER = `
+DROP TRIGGER IF EXISTS agent_runs_identity_immutable;
+CREATE TRIGGER agent_runs_identity_immutable BEFORE UPDATE OF session_id,agent_id,phase,purpose,round_id,input_board_id ON agent_runs WHEN NEW.session_id IS NOT OLD.session_id OR NEW.agent_id IS NOT OLD.agent_id OR NEW.phase IS NOT OLD.phase OR NEW.purpose IS NOT OLD.purpose OR NEW.round_id IS NOT OLD.round_id OR NEW.input_board_id IS NOT OLD.input_board_id BEGIN SELECT RAISE(ABORT, 'agent run identity is immutable'); END;
 `;
 
 export function migrateDatabase(database: SqliteDatabase): void {
@@ -67,6 +72,17 @@ export function migrateDatabase(database: SqliteDatabase): void {
           "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
         )
         .run(2, new Date().toISOString());
+    }
+    const providerIdentityApplied = database
+      .prepare("SELECT 1 FROM schema_migrations WHERE version = ?")
+      .get(3);
+    if (providerIdentityApplied === undefined) {
+      database.exec(PROVIDER_IDENTITY_TRIGGER);
+      database
+        .prepare(
+          "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+        )
+        .run(3, new Date().toISOString());
     }
   })();
 }

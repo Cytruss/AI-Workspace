@@ -1684,6 +1684,7 @@ describe("deliberation persistence", () => {
     deliberations.finishRound(round.id, "completed", outputBoard.id);
 
     for (const [column, value] of [
+      ["agent_id", "claude"],
       ["round_id", null],
       ["input_board_id", null],
       ["phase", "initial"],
@@ -1830,6 +1831,116 @@ describe("deliberation persistence", () => {
     database.pragma("ignore_check_constraints = OFF");
 
     expect(() => deliberations.load(session.id)).toThrow(/corrupt/i);
+    database.close();
+  });
+
+  test("load rejects legacy final graphs whose producing provider identity diverges", () => {
+    const { database, session, deliberations } = setupImmutableAudit();
+    database.exec("DROP TRIGGER agent_runs_identity_immutable");
+    database
+      .prepare("UPDATE agent_runs SET agent_id=? WHERE id=?")
+      .run("claude", "run-1");
+
+    expect(() => deliberations.load(session.id)).toThrow(/corrupt/i);
+    database.close();
+  });
+
+  test.each([
+    ["Codex", "run-1", "claude"],
+    ["Claude", "claude-run-1", "codex"],
+  ])(
+    "load rejects a verdict whose %s run resolves to the wrong provider",
+    (_provider, runId, tamperedAgentId) => {
+      const { database, session, deliberations } = setupImmutableAudit();
+      database.prepare("DELETE FROM final_positions").run();
+      database.exec("DROP TRIGGER agent_runs_identity_immutable");
+      database
+        .prepare("UPDATE agent_runs SET agent_id=? WHERE id=?")
+        .run(tamperedAgentId, runId);
+
+      expect(() => deliberations.load(session.id)).toThrow(/corrupt/i);
+      database.close();
+    },
+  );
+
+  test("load rejects origin and stance provider identities that diverge from their run", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 1,
+      payload: { claims: [{ id: "claim" }] },
+    });
+    deliberations.addClaim({
+      boardId: board.id,
+      canonicalId: "claim",
+      normalizedText: "claim",
+      material: true,
+    });
+    deliberations.addEvidenceReference({
+      boardId: board.id,
+      sessionId: session.id,
+      canonicalId: "evidence",
+      trackedPath: "src/index.ts",
+      resolution: "MISSING",
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 1,
+      phase: "initial",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    sessions.createAgentRun({
+      id: "producer",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "initial",
+      purpose: "draft",
+      inputBoardId: board.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "initial" },
+    });
+    deliberations.addClaimOrigin({
+      id: "claim-origin",
+      boardId: board.id,
+      canonicalClaimId: "claim",
+      agentId: "codex",
+      agentRunId: "producer",
+      providerLocalId: "claim-local",
+    });
+    deliberations.addEvidenceOrigin({
+      id: "evidence-origin",
+      boardId: board.id,
+      sessionId: session.id,
+      canonicalEvidenceId: "evidence",
+      agentId: "codex",
+      agentRunId: "producer",
+      providerLocalId: "evidence-local",
+    });
+    const stance = deliberations.addStance({
+      boardId: board.id,
+      canonicalClaimId: "claim",
+      roundId: round.id,
+      agentRunId: "producer",
+      agentId: "codex",
+      stance: "ACCEPT",
+      reasoning: "reason",
+    });
+
+    for (const [table, idColumn, id] of [
+      ["claim_origins", "id", "claim-origin"],
+      ["evidence_origins", "id", "evidence-origin"],
+      ["stances", "id", stance.id],
+    ] as const) {
+      database
+        .prepare(`UPDATE ${table} SET agent_id=? WHERE ${idColumn}=?`)
+        .run("claude", id);
+      expect(() => deliberations.load(session.id)).toThrow(/corrupt/i);
+      database
+        .prepare(`UPDATE ${table} SET agent_id=? WHERE ${idColumn}=?`)
+        .run("codex", id);
+    }
     database.close();
   });
 });
