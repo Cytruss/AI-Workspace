@@ -2,7 +2,7 @@
 
 ## Result
 
-REMEDIATED — PENDING RE-REVIEW. The first, second, and third architecture reviews failed. Their findings have been addressed in successive remediation commits, but this report does not claim review acceptance.
+REMEDIATED — PENDING RE-REVIEW. The first, second, third, and fourth architecture reviews failed. Their findings have been addressed in successive remediation commits, but this report does not claim review acceptance.
 
 Architecture amendment commit: `8565acca7238b842076e9ee8eb0f5eed9a1a533a` (`docs: strengthen architecture for structured debate`).
 
@@ -14,6 +14,8 @@ Architecture/remediation history:
 - `218d8c06d67e8e49f02833da7ca926e02cab9b1e` — second-review architecture remediation.
 - `83b698b3bf0f53738dd98e7dcdf244a3157b9fe6` — second-remediation report and ledger evidence.
 - `12c1906cb65b697955732b0e5848a8843d2ee7d9` — third-review architecture remediation and model-selection decision.
+- `847da0a3e3128fd7cc23b3a74e63a564fd63dccc` — third-remediation report and ledger evidence.
+- `ba5bb22a45d9ef5532bd3092a8ce3f64fb898c46` — fourth-review model-execution, Claude fallback, and executable-discovery remediation.
 
 ## Changed files
 
@@ -136,3 +138,30 @@ The same commit adds ADR-0008 for allowlisted concrete provider model selections
 Tracked-file scans found no active abstract model-profile vocabulary, stale ADR-0008 filename, active SDK dependency/instruction, personal machine path/name/email, project-specific identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004.
 
 Review status after third remediation: PENDING RE-REVIEW.
+
+## Fourth failed review and remediation
+
+The fourth review found that the third remediation overstated model-selection completeness. It did not define one normalized request/result model contract end to end, distinguish capability discovery from runtime observation, verify Claude's executed model class, neutralize ambient availability and classifier fallback, or cover a CLI installed outside the current process `PATH`. This report corrects the overstatement and records the review as failed.
+
+Commit `ba5bb22a45d9ef5532bd3092a8ce3f64fb898c46` defines exact `ResolvedModelSelection`, `AgentCapabilities`, and `ModelExecution` contracts in the normative spec and plan. Ask and debate resolve an optional selection once and pass it unchanged to every provider call. Persistence, Discord results, and `/status` retain requested class/CLI ID/effort, every normalized observed model ID, verification, and failure diagnostics. Unknown classes fail before argument construction or spawn.
+
+ADR-0008, ADR-0007, the spec, and adapter tasks now require Claude's bounded inline `--settings` value `{"fallbackModel":[],"switchModelsOnFlag":false}` together with `--bare`. The reviewed compatibility floor is Claude Code 2.1.233. JSON `modelUsage` is normalized and checked against bounded literal exact-ID/family-prefix policies: same-class alias version movement is accepted, cross-class use fails `MODEL_CLASS_CHANGED`, and absent observations for explicit selection fail `MODEL_OBSERVATION_UNAVAILABLE`. Classifier refusal and availability failure remain failures, never fallback. Requested effort is not represented as observed effort.
+
+Setup and doctor now resolve commands in a portable order: configured explicit path, direct `PATH` lookup, then only narrow platform candidates. The plan includes `%APPDATA%\npm\claude.cmd`, the provider-documented Windows native launcher, and `~/.local/bin/claude` on macOS/Linux, with Windows/macOS/Linux tests and actionable diagnostics. Resolution never recursively scans a home directory, reads credentials/session state, invokes a shell, or mutates `PATH`; setup saves a discovered path only after confirmation. Local read-only discovery observed Claude Code 2.1.233 at the generic Windows npm-shim location while bare `claude` was absent from the current process `PATH`; no personal absolute path is recorded.
+
+## Fourth-remediation verification evidence
+
+| Command                          | Result |
+| -------------------------------- | ------ |
+| `pnpm install --frozen-lockfile` | PASS; lockfile was current. |
+| `pnpm format`                    | PASS after sandbox permission allowed dependency reads. |
+| `pnpm format:check`              | PASS; all matched files use Prettier style. |
+| `pnpm lint`                      | PASS; exit 0. |
+| `pnpm typecheck`                 | PASS; exit 0. |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
+| `pnpm build`                     | PASS; exit 0. |
+| `git diff --check`               | PASS; no whitespace errors. |
+
+The full architecture diff was inspected for spec/plan contradictions. Tracked-file scans found no personal absolute path, personal name, email address, numeric Discord identifier, secret, active SDK dependency/instruction, stale singular observed-model persistence contract, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative.
+
+Review status after fourth remediation: PENDING RE-REVIEW.

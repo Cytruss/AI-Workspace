@@ -10,7 +10,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Work item               | Status      | Evidence                                                                 |
 | ----------------------- | ----------- | ------------------------------------------------------------------------ |
 | Task 1: foundation      | PASS        | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass. |
-| Architecture amendments | PENDING RE-REVIEW | Three reviews failed; all remediation rounds await re-review. |
+| Architecture amendments | PENDING RE-REVIEW | Four reviews failed; all remediation rounds await re-review. |
 
 ## Pre-flight dependency scan
 
@@ -19,11 +19,11 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Task 1   | Task 11  | `package.json`, `.env.example`               | Consistent: Task 11 modifies the foundation created by Task 1.      |
 | Task 2   | Task 3   | `ProjectConfig`                              | Consistent: canonical project validation consumes configured roots. |
 | Task 2   | Task 6   | `AgentConfig`                                | Consistent: agent settings feed the registry and adapters.          |
-| Task 2   | Task 7   | concrete model selections                    | Consistent: adapters receive pre-resolved provider selections.      |
+| Task 2   | Task 7   | concrete model selections                    | Consistent: adapters receive exact resolved selections and observation policies. |
 | Task 2   | Task 8   | concrete model selections                    | Consistent: ask resolves separate provider classes before runs.     |
 | Task 2   | Task 9   | `DebateConfig`, model selections             | Consistent: debate freezes bounds and one selection per provider.   |
 | Task 2   | Task 10  | configured model classes                     | Consistent: Discord registers only provider allowlisted choices.    |
-| Task 2   | Task 11  | `getAppPaths`, `loadConfig`, `saveConfig`    | Consistent: CLI composition owns configuration I/O.                 |
+| Task 2   | Task 11  | configuration and executable overrides       | Consistent: CLI composition owns config I/O and portable command discovery. |
 | Task 3   | Task 7   | `captureGitIntegrity`, canonical roots       | Consistent: both adapters use the same integrity boundary.          |
 | Task 3   | Task 8   | `ProjectService`, `RegisteredProject`        | Consistent: ask orchestration resolves validated projects.          |
 | Task 3   | Task 11  | project validation                           | Consistent: setup validates projects before saving.                 |
@@ -34,7 +34,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Task 5   | Task 6   | `ProcessResult`                              | Consistent: normalized process outcomes underpin agent results.     |
 | Task 5   | Task 7   | `runProcess`, termination                    | Consistent: adapters delegate all process handling.                 |
 | Task 5   | Task 11  | graceful shutdown                            | Consistent: startup cancels active process trees.                   |
-| Task 6   | Task 7   | `AgentAdapter`, safe environment, help flags | Consistent: adapters implement and reuse the shared boundary.       |
+| Task 6   | Task 7   | adapter/model contracts and capabilities     | Consistent: adapters implement normalized request, result, and probe boundaries. |
 | Task 6   | Task 8   | `AgentRegistry`, `AgentResult`               | Consistent: orchestration is CLI-independent.                       |
 | Task 6   | Task 9   | phase-discriminated response schemas         | Consistent: deliberation validates exact phase namespaces/coverage. |
 | Task 6   | Task 10  | capability probes                            | Consistent: `/projects` can report adapter availability.            |
@@ -97,7 +97,11 @@ Ruling: Debate turns are stateless by default and receive an explicit compact cl
 
 Ruling: Use phase-discriminated provider schemas rather than one generic response. Initial alone creates run-local claim/evidence drafts; cross-examination and final positions cover supplied canonical claims, separate existing canonical evidence from same-response new evidence, and reject wrong-phase fields and all namespace/coverage/dangling/cross-run errors — if wrong, later-phase claim creation may be needed, and ADR-0006 records that evaluation trigger.
 
-Ruling: Expose allowlisted concrete provider model classes rather than abstract quality profiles or raw model strings. Config maps each class to an opaque CLI ID and optional effort, omission means provider default, provider selections remain fixed across a debate, and every run records class/requested ID/observed ID/effort — if wrong, ADR-0008 keeps the mapping reversible without changing the adapter boundary.
+Ruling: Expose allowlisted concrete provider model classes rather than abstract quality profiles or raw model strings. Config maps each class to an opaque CLI ID, optional requested effort, and bounded literal accepted-observation policy. Omission means provider default. Orchestration passes one immutable `ResolvedModelSelection` unchanged across a debate, while every run records a normalized `ModelExecution` with all observed IDs and verification — if wrong, ADR-0008 keeps the mapping reversible without changing the adapter boundary.
+
+Ruling: Claude selected-model stability means concrete class stability, not permanent alias-to-version identity. Pass inline settings that empty availability fallback and disable classifier switching; require JSON `modelUsage` for explicit selection; accept only configured literal exact IDs/prefixes; fail cross-class use or absent observations with audit-preserving errors; and store effort only as requested — if wrong, operators can narrow accepted observations to exact IDs or ADR-0008 can be revisited without weakening process isolation.
+
+Ruling: Resolve agent executables by configured explicit path, direct `PATH` lookup, then narrow platform candidates only. Do not recursively scan home, read credentials/sessions, invoke a shell, or mutate `PATH`; setup persists a discovered path only after confirmation — if wrong, adding another provider-documented candidate is a localized resolver change with platform tests.
 
 ## Architecture amendment audit
 
@@ -107,6 +111,8 @@ Second review status: FAILED on 2026-08-23.
 
 Third review status: FAILED on 2026-08-23.
 
+Fourth review status: FAILED on 2026-08-23.
+
 Remediation status: PENDING RE-REVIEW.
 
 The failed review found that the Codex SDK choice did not establish the required process-tree and ambient-config isolation guarantees; verdict rules were not exhaustive; debate configuration was underspecified; persistence could not reconstruct every provider call; provider IDs and duplicate provenance were ambiguous; and command/documentation details were inconsistent.
@@ -115,6 +121,12 @@ The first remediation pivots to symmetric hardened local CLIs, removes the SDK d
 
 The second remediation restores superseded ADR-0004 as historical record and creates ADR-0007 for the controller-authorized hardened design; defines Claude's exact bare/read-only/MCP-denied argument boundary and fail-closed version/flag probes; separates Codex file-schema transport from Claude's bounded inline schema; and adds deterministic canonical evidence IDs, many-to-one evidence origins, local-to-canonical claim/stance evidence joins, collision rules, and reconstruction tests. The third review established that this description overstated completeness because phase-specific provider namespaces/coverage and an explicit evidence-board FK were still absent.
 
-The third remediation defines exact initial/cross-examination/final provider schemas, forbids later claim creation, validates/translates existing versus same-response new evidence, adds orphan/cross-board evidence FKs/tests, and adds ADR-0008 plus concrete provider model-class selection across config, adapters, persistence, Discord, doctor, tests, and future public docs. Architecture/remediation history is `8565acca7238b842076e9ee8eb0f5eed9a1a533a`, `2f25462a2fdf6f367d87c6492c1523752f5664d5`, `21d85d80e78eb1ca476ca255675577e88572ccda`, `218d8c06d67e8e49f02833da7ca926e02cab9b1e`, `83b698b3bf0f53738dd98e7dcdf244a3157b9fe6`, and `12c1906cb65b697955732b0e5848a8843d2ee7d9`. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
+The third remediation defines exact initial/cross-examination/final provider schemas, forbids later claim creation, validates/translates existing versus same-response new evidence, adds orphan/cross-board evidence FKs/tests, and adds ADR-0008 plus concrete provider model-class selection across config, adapters, persistence, Discord, doctor, tests, and future public docs.
+
+The fourth review found that model selection was not normalized across request, capabilities, result, persistence, and presentation; Claude fallback and runtime class observation were not enforced; and CLI discovery did not cover a safe executable outside the current process `PATH`. The fourth remediation adds the exact normalized model contracts, literal class-observation policy, Claude fallback-neutralizing settings and `modelUsage` verification, audit-preserving model failure codes, and portable explicit-path/PATH/narrow-candidate discovery with confirmation and platform tests.
+
+Architecture/remediation history is `8565acca7238b842076e9ee8eb0f5eed9a1a533a`, `2f25462a2fdf6f367d87c6492c1523752f5664d5`, `21d85d80e78eb1ca476ca255675577e88572ccda`, `218d8c06d67e8e49f02833da7ca926e02cab9b1e`, `83b698b3bf0f53738dd98e7dcdf244a3157b9fe6`, `12c1906cb65b697955732b0e5848a8843d2ee7d9`, `847da0a3e3128fd7cc23b3a74e63a564fd63dccc`, and `ba5bb22a45d9ef5532bd3092a8ce3f64fb898c46`. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
 
 Third-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no active abstract profile vocabulary, SDK dependency/instruction, stale active ADR link, personal identifier/path/email, project-specific sample identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004. Status remains PENDING RE-REVIEW.
+
+Fourth-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. The formatter initially encountered sandbox-denied dependency reads, then passed after the permitted rerun. Repository scans found no personal absolute path/name/email, numeric Discord identifier, secret, active SDK dependency/instruction, stale singular observed-model contract, abstract model-profile vocabulary, or non-English public prose. Historical SDK text remains only in superseded ADR-0004 and ADR-0007's rejected alternative. Status remains PENDING RE-REVIEW.
