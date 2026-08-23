@@ -2,7 +2,7 @@
 
 ## Summary
 
-AI Workspace is a local, multi-project orchestration service for software-development agents. Its first interface is a Discord bot, and its first two agent integrations use the official OpenAI Codex SDK and the local Claude Code CLI. The system removes the need to copy responses manually between agents by coordinating independent analysis, structured cross-examination, bounded deliberation, and deterministic verdict derivation.
+AI Workspace is a local, multi-project orchestration service for software-development agents. Its first interface is a Discord bot, and its first two agent integrations use separately installed Codex and Claude Code CLIs. The system removes the need to copy responses manually between agents by coordinating independent analysis, structured cross-examination, bounded deliberation, and deterministic verdict derivation.
 
 The project is generic and public. All source code, documentation, configuration keys, commands, errors, and user-facing messages are in English. No personal paths, Discord identifiers, or application-specific assumptions are committed to the repository.
 
@@ -32,10 +32,10 @@ The project is generic and public. All source code, documentation, configuration
 - Node.js 22 or later.
 - pnpm managed through the version pinned in `package.json`.
 - Git projects on Windows, macOS, and Linux.
-- The official `@openai/codex-sdk` package and a separately installed and authenticated Claude Code CLI.
+- Separately installed and authenticated Codex and Claude Code CLIs.
 - A Discord application and bot token supplied by the operator.
 
-Users install and authenticate the Claude Code CLI separately. The Codex integration uses the official SDK package pinned by AI Workspace. The setup command detects provider availability, versions, authentication state where a stable diagnostic is available, and automation capabilities. A missing provider does not prevent the other adapter from working, but commands that require both agents report a clear capability error.
+Users install and authenticate both CLIs separately. The setup command detects provider availability, versions, authentication state where a stable diagnostic is available, and automation capabilities. A missing provider does not prevent the other adapter from working, but commands that require both agents report a clear capability error.
 
 ## Architecture
 
@@ -98,9 +98,9 @@ interface AgentAdapter {
 }
 ```
 
-Each adapter owns provider discovery, invocation, structured-output parsing, and provider-specific permission settings. Setup records detected capabilities, but every run validates critical read-only capabilities again so an upgraded or replaced provider cannot silently weaken policy.
+Each adapter owns executable discovery, arguments, structured-output parsing, and provider-specific permission settings. Setup records detected capabilities, but every run validates critical read-only capabilities again so an upgraded or replaced executable cannot silently weaken policy.
 
-The Codex adapter uses the official `@openai/codex-sdk` and its structured event and output facilities. The Claude adapter invokes the separately installed and authenticated Claude Code CLI in non-interactive mode with JSON or JSON-schema output, tool restrictions, disabled session persistence, and a plan permission mode. AI Workspace refuses an `OBSERVE` run when an adapter cannot establish a supported read-only configuration.
+Both adapters invoke their separately installed CLIs through the bounded process runner. Codex requires `exec`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox read-only`, and `--cd` or `-C`. Claude requires non-interactive JSON or JSON-schema output, supported tool restrictions, disabled session persistence, and a plan/read-only permission mode. AI Workspace refuses an `OBSERVE` run when any required safety or structured-output capability is absent.
 
 ## Configuration and Local Data
 
@@ -108,9 +108,20 @@ The setup command creates a validated JSON configuration in the operating system
 
 - Discord guild and authorized user identifiers.
 - Registered project IDs, display names, and absolute roots.
-- Available agent adapters, Codex SDK options, and an optional Claude executable override.
+- Available agent adapters and optional Codex and Claude executable overrides.
 - Default agent, optional presentation polisher, round limit, timeouts, output limits, and concurrency.
+- Debate limits: `maxRounds` defaults to `3` and is bounded from `1` through `5`; `maxBoardClaims` defaults to `40` and is bounded from `2` through `200`; `maxBoardBytes` defaults to `65536` and is bounded from `4096` through `262144`.
 - Logging level and local data-retention settings.
+
+The normalized debate configuration is exact:
+
+```ts
+interface DebateConfig {
+  maxRounds: number; // integer, default 3, minimum 1, maximum 5
+  maxBoardClaims: number; // integer, default 40, minimum 2, maximum 200
+  maxBoardBytes: number; // integer, default 65_536, minimum 4_096, maximum 262_144
+}
+```
 
 Secrets are loaded from the process environment or an untracked local `.env` file. The repository contains `.env.example` with example variable names and empty values only. Secrets are never persisted in SQLite or included in logs, prompts, diagnostics, or Discord output.
 
@@ -125,7 +136,7 @@ V0.1 exposes this minimal command set:
 - `/projects`: list configured projects and adapter availability.
 - `/switch project:<id>`: select the active project for the invoking user and channel.
 - `/ask agent:<codex|claude|both> question:<text>`: run one or two independent analyses.
-- `/debate topic:<text>`: run bounded Codex/Claude deliberation and deterministic verdict derivation.
+- `/debate topic:<text> project:<id?>`: run bounded Codex/Claude deliberation and deterministic verdict derivation against the optional project or the active project.
 - `/status`: show active and recent runs without exposing prompts or secrets to unauthorized users.
 - `/stop run:<id|current>`: cancel an authorized active run.
 
@@ -138,8 +149,8 @@ Discord interaction acknowledgements are sent before the platform deadline. Long
 3. The orchestrator creates a persisted session and run records.
 4. The context builder creates a minimal prompt from project metadata, the current request, and an explicit compact claim board when deliberation state is required. V0.1 does not retrieve semantic memory.
 5. The permission service checks the requested mode and adapter capabilities.
-6. The adapter invokes the provider through the Codex SDK or directly spawns the Claude CLI with an argument array and a restricted environment.
-7. The adapter consumes bounded structured events or output, applies the timeout, and listens for cancellation; the Claude process runner also bounds stdout and stderr.
+6. The adapter directly spawns the selected CLI through the bounded process runner with an argument array and a restricted environment.
+7. The process runner bounds stdout and stderr, applies the timeout, listens for cancellation, and terminates the complete descendant process tree.
 8. The adapter normalizes the response. Persistence records the outcome before Discord formatting begins.
 9. The formatter returns the response, partial result, or actionable diagnostic.
 
@@ -147,11 +158,13 @@ Agent-to-agent communication always passes through the orchestrator. Agents neve
 
 ## Structured Deliberation Protocol
 
-The deliberation engine owns a shared claim board and uses stable schemas for claims, evidence references, stances, rounds, and final positions. The configured maximum number of rounds is always finite.
+The deliberation engine owns a shared claim board and uses stable schemas for claims, evidence references, stances, rounds, final positions, and immutable verdicts. `DebateConfig` supplies `maxRounds`, `maxBoardClaims`, and `maxBoardBytes` with the defaults and bounds defined above; every debate records the effective values it used.
 
 ### Initial claims
 
-Codex and Claude receive the same project, topic, evidence rules, and response schema concurrently. Neither receives the other's response. Each independently returns material claims, evidence references, assumptions, risks, and a proposed position. Unsupported evidence references are recorded as unsupported rather than silently promoted to verified evidence.
+Codex and Claude receive the same project, topic, evidence rules, and response schema concurrently. Neither receives the other's response. Each independently returns material claims with provider-local claim references, evidence references, assumptions, risks, and a proposed position. Providers never assign canonical claim IDs.
+
+After deterministic normalization and sorting, the orchestrator assigns monotonically ordered canonical IDs such as `claim-0001`. Exact normalized duplicates merge into one canonical claim while retaining every origin as `(agent, run, provider-local claim reference)` provenance. Provider-local reference collisions within a run fail schema validation.
 
 ### Shared claim board and cross-examination
 
@@ -161,11 +174,22 @@ The orchestrator normalizes and persists both initial responses into a compact c
 
 An additional round runs only for material claims that remain disputed or uncertain and only when the configured round cap permits it. Each call receives the compact board entries and evidence relevant to those unresolved claims, not an unconstrained transcript or hidden provider session.
 
+### Evidence resolution
+
+Host code resolves evidence mechanically and separately from verdict classification. A reference is `VERIFIED` only when its tracked path remains inside the canonical project root and its requested line range or content hash matches. A missing tracked target is `MISSING`; an escaping, malformed, out-of-range, or hash-mismatched reference is `INVALID`. `VERIFIED` means only that the cited bytes exist and match; AI Workspace never claims that evidence is semantically true. Consensus with no `VERIFIED` evidence is visibly marked `UNSUPPORTED`.
+
 ### Final positions and verdicts
 
-Each available agent independently submits a final position against the resulting claim board. Pure deterministic application code derives consensus and unresolved disagreements from the recorded stances and final positions. A model may polish the wording and organization of the report, but it must not add, remove, or change any verdict, stance, evidence status, or final position.
+Each agent independently submits exactly one final stance per canonical material claim. Earlier-round stances remain audit history and never affect the final classification. Pure code applies this exhaustive rule only to the two successful agents' final stances:
 
-If one agent fails before completing initial claims, the system does not label the result a debate; it returns the successful analysis with a failure diagnostic. A later failure produces a clearly marked partial debate, preserves the completed claim board, and deterministically reports only verdicts supported by the available records.
+- `ACCEPT` + `ACCEPT` = `CONSENSUS`.
+- `ACCEPT` + `DISPUTE`, in either order, = `DISAGREEMENT`.
+- `DISPUTE` + `DISPUTE` = `REJECTED`.
+- Every combination containing `UNCERTAIN`, any missing, failed, or cancelled agent, or anything other than exactly two valid final stances = `UNRESOLVED`.
+
+Each immutable structured verdict records the canonical claim ID, classification, both final stance records and their run/round IDs, evidence resolution and provenance, support marker, and deterministic counts. A model may change summary prose only. Host code deep-compares the complete verdict collection before and after polishing and rejects any change to verdicts, classifications, evidence or provenance, IDs, or counts.
+
+If one agent fails before completing initial claims, the system does not label the result a debate; it returns the successful analysis with a failure diagnostic. A later failure produces a clearly marked partial debate, preserves the completed claim board, and classifies affected claims as `UNRESOLVED`.
 
 ## Security Model
 
@@ -208,13 +232,15 @@ SQLite is stored in the per-user application-data directory and migrated transac
 - `active_projects`: project selection scoped to guild, channel, and user.
 - `sessions`: command type, project, requester, lifecycle, and timestamps.
 - `messages`: normalized user, agent, and rendered report messages.
-- `agent_runs`: adapter, round, status, duration, exit metadata, and bounded diagnostics.
-- `debate_rounds`: ordering, participants, completion state, and bounded context metadata.
-- `claim_boards`: the versioned compact board for a debate session.
-- `claims`: normalized material claims and their originating agent.
-- `evidence_references`: project evidence locations and support status associated with claims.
-- `stances`: `ACCEPT`, `DISPUTE`, or `UNCERTAIN` cross-examination records.
-- `final_positions`: each agent's independent conclusion against the final claim board.
+- `claim_boards`: immutable versioned snapshots with bounded serialized payloads, byte lengths, and content hashes.
+- `claims`: canonical claims keyed within a board snapshot.
+- `claim_origins`: many-to-one provenance from a canonical claim to agent, run, and provider-local claim reference.
+- `evidence_references`: tracked in-root path plus line/hash reference and mechanical `VERIFIED`, `INVALID`, or `MISSING` resolution.
+- `debate_rounds`: phase, ordering, completion state, and foreign keys to exact input and output board snapshots.
+- `agent_runs`: adapter, round, phase/purpose, exact bounded request/response payloads, input/output board references, status, duration, exit metadata, and bounded diagnostics.
+- `stances`: `ACCEPT`, `DISPUTE`, or `UNCERTAIN` audit-history records linked to the producing run, round, and canonical claim.
+- `final_positions`: each agent's independent final stances linked to the producing run, round, and canonical claims.
+- `verdicts`: immutable deterministic classifications, evidence support, provenance, stance/run links, counts, and content hash.
 - `errors`: stable error code, safe message, context, and timestamp.
 
 Foreign keys are enabled. Session creation and state transitions are transactional. Raw secrets and unrestricted environment dumps are never stored. Conversation data remains local until the operator deletes the application-data directory; automated retention controls are deferred until usage patterns are known.
@@ -235,7 +261,7 @@ Long-term semantic memory for facts, hypotheses, experiments, decisions, rejecte
 
 Vitest is used for unit and integration tests. Fake Node-based agent executables simulate successful structured output, streaming output, malformed data, authentication failures, non-zero exits, hangs, oversized output, ignored termination signals, and spawned child processes.
 
-Unit tests cover configuration, authorization, path validation, deliberation state transitions, deterministic verdict rules, bounded context, error mapping, formatting, and redaction. Integration tests cover SQLite migrations and repositories, process execution, cancellation, timeouts, output limits, and both adapters' structured output. Discord tests use a transport boundary rather than a live server.
+Unit tests cover configuration bounds, authorization, path validation, canonical claim assignment and collisions, deliberation state transitions, the exhaustive verdict matrix, mechanical evidence resolution, immutable polishing checks, bounded context, error mapping, formatting, and redaction. Integration tests cover SQLite migrations and complete call reconstruction, process-tree cancellation, timeouts, output limits, and both CLI adapters' structured output. Discord tests use a transport boundary rather than a live server.
 
 CI runs on Windows, macOS, and Linux using the supported Node version. Tests requiring real accounts are opt-in smoke tests and never run in public CI. Release checks include formatting, linting, type checking, unit tests, integration tests, secret scanning, and a clean install from a fresh clone.
 
@@ -271,7 +297,9 @@ The repository is licensed under Apache License 2.0. This permits private, comme
 
 ## External References
 
-- [Codex SDK](https://developers.openai.com/codex/sdk/)
+- [Codex TypeScript SDK execution source](https://github.com/openai/codex/blob/main/sdk/typescript/src/exec.ts)
+- [Codex hardened-execution issue](https://github.com/openai/codex/issues/34802)
+- [Codex CLI exec argument source](https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs)
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
 - [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.html)
 

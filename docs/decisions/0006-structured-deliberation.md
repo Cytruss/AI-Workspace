@@ -16,14 +16,18 @@ The product must provide genuine, inspectable communication between Codex and Cl
 
 Use a structured deliberation protocol with:
 
-1. independent initial claims and explicit evidence references;
-2. a shared, persisted claim board;
+1. independent initial claims with provider-local references and explicit evidence references;
+2. deterministic host-assigned canonical claim IDs, complete many-to-one origin provenance, and immutable persisted claim-board snapshots;
 3. cross-examination stances of `ACCEPT`, `DISPUTE`, or `UNCERTAIN`;
 4. additional rounds only for unresolved material claims and only within a fixed round cap;
 5. independent final positions; and
-6. deterministic derivation of consensus and unresolved disagreements from recorded stances and final positions.
+6. deterministic verdict derivation from exactly the two agents' final stances.
 
-Each provider call is stateless by default and receives an explicit compact claim board. A model may polish the final presentation but cannot add, remove, or alter verdicts.
+Earlier stances are audit history only. `ACCEPT` plus `ACCEPT` is `CONSENSUS`; `ACCEPT` plus `DISPUTE` in either order is `DISAGREEMENT`; `DISPUTE` plus `DISPUTE` is `REJECTED`; every pair containing `UNCERTAIN`, any missing/failed/cancelled agent, or anything other than exactly two valid final stances is `UNRESOLVED`.
+
+Host code resolves tracked in-root path and line/hash evidence mechanically as `VERIFIED`, `INVALID`, or `MISSING`; this validates cited bytes, not semantic truth. Consensus without verified evidence is visibly `UNSUPPORTED`.
+
+Each provider call is stateless by default and receives an explicit compact claim board. A model may polish summary prose only. Host code deep-compares and rejects any change to immutable verdicts, classifications, stances, evidence/provenance, IDs, or counts.
 
 ## Alternatives considered
 
@@ -34,7 +38,7 @@ Each provider call is stateless by default and receives an explicit compact clai
 
 ## Reasons
 
-- Claims, evidence, and stance transitions remain inspectable and reproducible.
+- Canonical claims, every provider origin, evidence resolution, call inputs/outputs, and stance transitions remain inspectable and reproducible.
 - Deterministic verdict rules preserve disagreements instead of asking one model to erase them.
 - Explicit bounded context treats providers symmetrically and limits token growth.
 - Stateless calls reduce dependence on provider-specific session behavior.

@@ -10,7 +10,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Work item               | Status      | Evidence                                                                 |
 | ----------------------- | ----------- | ------------------------------------------------------------------------ |
 | Task 1: foundation      | PASS        | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass. |
-| Architecture amendments | PASS        | Spec, plan, ADRs, and ledger align; all required local checks pass.      |
+| Architecture amendments | PENDING RE-REVIEW | First review failed; findings are remediated and awaiting review.    |
 
 ## Pre-flight dependency scan
 
@@ -55,7 +55,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Task 4  | Migration/repository tests match schema and methods                     | Ask and deliberation state have explicit repositories       | Consistent.                                          |
 | Task 5  | Fake modes cover every process outcome                                  | Result type is consumed by agent core                       | Consistent.                                          |
 | Task 6  | Registry, environment, capability, and schema tests match APIs           | Types and helpers are consumed by adapters/orchestrator     | Consistent.                                          |
-| Task 7  | SDK/CLI structured-output integration tests match both adapters          | Adapters are consumed through registry                      | Consistent; real provider smoke checks remain opt-in. |
+| Task 7  | Symmetric hardened CLI integration tests match both adapters              | Adapters are consumed through registry                      | Consistent; real provider smoke checks remain opt-in. |
 | Task 8  | Single/both/failure/cancel/idempotency/concurrency cases match services | Discord and startup consume outputs                         | Consistent.                                          |
 | Task 9  | Agreement/disagreement/failure/cap/cancellation/context cases match protocol | Persisted board feeds deterministic verdicts            | Consistent.                                          |
 | Task 10 | Authorization/handler/format cases match command surface                | Runtime is composed by Task 11                              | Consistent.                                          |
@@ -73,7 +73,9 @@ Ruling: Retain TypeScript rather than switch the MVP to Go or Rust because Disco
 
 Ruling: Retain `better-sqlite3` rather than raise the runtime floor and use `node:sqlite` because Node 24's built-in module is still Stability 1.2 (release candidate) as of 2026-08-23; narrow pnpm lifecycle permission is a smaller risk than coupling persistence to a release-candidate API — if wrong, Task 4's repository boundary makes a driver swap localized, at the cost of maintaining one native dependency meanwhile.
 
-Ruling: Implement Codex through official `@openai/codex-sdk@0.149.0` rather than hand-building `codex exec` arguments and parsing JSONL; the SDK wraps the local CLI, supports structured streams/output, working-directory controls, and explicit environment/config overrides — if wrong, the `AgentAdapter` boundary permits restoring the raw CLI implementation, at the cost of one adapter rewrite and an extra dependency meanwhile.
+Superseded ruling from the failed first review: implement Codex through `@openai/codex-sdk@0.149.0`.
+
+Remediation ruling: invoke a separately installed Codex CLI through the project process runner, require `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, read-only sandboxing, and explicit working-directory flags, and fail closed if any capability is absent. The SDK exposes an abort signal but does not establish the complete descendant-tree ownership or ambient configuration/rule isolation required by v0.1; if those guarantees become available later, ADR-0004 defines the revisit test.
 
 Ruling: Keep Claude on its separately installed CLI for Milestone 1 rather than bundle `@anthropic-ai/claude-agent-sdk`; Anthropic's quickstart directs third-party applications to API-key authentication and warns against offering claude.ai login/rate limits without approval, while the product goal is to reuse each operator's local Claude Code authentication — if wrong, the adapter can migrate to the official SDK later, at the cost of maintaining CLI parsing in the first release.
 
@@ -91,8 +93,12 @@ Ruling: Debate turns are stateless by default and receive an explicit compact cl
 
 ## Architecture amendment audit
 
-Status: PASS on 2026-08-23.
+First review status: FAILED on 2026-08-23.
 
-The six material rulings above are now persisted as indexed records under `docs/decisions/`. The design specification makes provider integration, Git-tracked-link validation, the `OBSERVE` boundary, stateless structured deliberation, deterministic verdicts, and first-slice `/debate` delivery normative. The implementation plan carries those constraints through persistence, normalized schemas, adapter mechanics, a dedicated deliberation task, Discord rendering, end-to-end tests, public documentation, and the milestone gate.
+Remediation status: PENDING RE-REVIEW.
 
-Verification evidence: `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0. The test suite reported one passing file and one passing test. Repository scans found no committed personal path, name, email address, project-specific sample identifier, or non-English public content in the amendment set.
+The failed review found that the Codex SDK choice did not establish the required process-tree and ambient-config isolation guarantees; verdict rules were not exhaustive; debate configuration was underspecified; persistence could not reconstruct every provider call; provider IDs and duplicate provenance were ambiguous; and command/documentation details were inconsistent.
+
+The remediation pivots to symmetric hardened local CLIs, removes the SDK dependency, defines the exact final-stances-only verdict matrix and mechanical evidence resolution, adds bounded `DebateConfig`, makes board/run/round/final-position/verdict persistence reconstructible, assigns canonical IDs in host code while preserving every provider origin, aligns `/debate topic` plus optional `project`, and fixes the future README ADR link. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
+
+Remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no active SDK dependency/instruction, stale ADR link, personal identifier/path/email, project-specific sample identifier, secret, or Polish-language public content. Status remains PENDING RE-REVIEW.

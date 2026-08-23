@@ -23,7 +23,7 @@ Implement v0.1 with TypeScript on Node.js 22 or later.
 
 ## Reasons
 
-- `discord.js`, the official Codex SDK, and the selected validation and test tools integrate directly with Node.js.
+- `discord.js`, Node's cross-platform process APIs, and the selected validation and test tools integrate directly with Node.js.
 - TypeScript is well suited to normalized schemas and JSON-based provider boundaries.
 - The language is broadly accessible to likely contributors.
 - Explicit module ports preserve the option to replace infrastructure or the runtime later.
