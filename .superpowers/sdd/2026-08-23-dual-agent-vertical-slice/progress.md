@@ -10,7 +10,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Work item               | Status      | Evidence                                                                 |
 | ----------------------- | ----------- | ------------------------------------------------------------------------ |
 | Task 1: foundation      | PASS        | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass. |
-| Architecture amendments | PENDING RE-REVIEW | First and second reviews failed; both remediation rounds await re-review. |
+| Architecture amendments | PENDING RE-REVIEW | Three reviews failed; all remediation rounds await re-review. |
 
 ## Pre-flight dependency scan
 
@@ -19,6 +19,10 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Task 1   | Task 11  | `package.json`, `.env.example`               | Consistent: Task 11 modifies the foundation created by Task 1.      |
 | Task 2   | Task 3   | `ProjectConfig`                              | Consistent: canonical project validation consumes configured roots. |
 | Task 2   | Task 6   | `AgentConfig`                                | Consistent: agent settings feed the registry and adapters.          |
+| Task 2   | Task 7   | concrete model selections                    | Consistent: adapters receive pre-resolved provider selections.      |
+| Task 2   | Task 8   | concrete model selections                    | Consistent: ask resolves separate provider classes before runs.     |
+| Task 2   | Task 9   | `DebateConfig`, model selections             | Consistent: debate freezes bounds and one selection per provider.   |
+| Task 2   | Task 10  | configured model classes                     | Consistent: Discord registers only provider allowlisted choices.    |
 | Task 2   | Task 11  | `getAppPaths`, `loadConfig`, `saveConfig`    | Consistent: CLI composition owns configuration I/O.                 |
 | Task 3   | Task 7   | `captureGitIntegrity`, canonical roots       | Consistent: both adapters use the same integrity boundary.          |
 | Task 3   | Task 8   | `ProjectService`, `RegisteredProject`        | Consistent: ask orchestration resolves validated projects.          |
@@ -32,11 +36,11 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Task 5   | Task 11  | graceful shutdown                            | Consistent: startup cancels active process trees.                   |
 | Task 6   | Task 7   | `AgentAdapter`, safe environment, help flags | Consistent: adapters implement and reuse the shared boundary.       |
 | Task 6   | Task 8   | `AgentRegistry`, `AgentResult`               | Consistent: orchestration is CLI-independent.                       |
-| Task 6   | Task 9   | structured response schemas                  | Consistent: deliberation consumes normalized provider-neutral data. |
+| Task 6   | Task 9   | phase-discriminated response schemas         | Consistent: deliberation validates exact phase namespaces/coverage. |
 | Task 6   | Task 10  | capability probes                            | Consistent: `/projects` can report adapter availability.            |
 | Task 6   | Task 11  | registry composition                         | Consistent: startup constructs the registered adapters.             |
 | Task 7   | Task 8   | Codex and Claude adapters                    | Consistent: both are selected through `AgentRegistry`.              |
-| Task 7   | Task 9   | structured provider calls                    | Consistent: debate uses both adapters through stable schemas.       |
+| Task 7   | Task 9   | structured provider calls                    | Consistent: debate uses exact phase schemas and frozen selections.  |
 | Task 7   | Task 11  | provider configuration and diagnostics       | Consistent: doctor and startup own adapter construction.            |
 | Task 8   | Task 9   | `ActiveRuns`, `ConcurrencyGate`              | Consistent: debate shares bounded lifecycle infrastructure.         |
 | Task 8   | Task 10  | `AskService`, `ActiveRuns`                   | Consistent: Discord remains a thin transport.                       |
@@ -54,12 +58,12 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Task 3  | Git-root, tracked-link, and integrity cases match APIs                   | Project and integrity APIs have named consumers             | Consistent.                                          |
 | Task 4  | Migration/repository tests match schema and methods                     | Ask and deliberation state have explicit repositories       | Consistent.                                          |
 | Task 5  | Fake modes cover every process outcome                                  | Result type is consumed by agent core                       | Consistent.                                          |
-| Task 6  | Registry, environment, capability, and schema tests match APIs           | Types and helpers are consumed by adapters/orchestrator     | Consistent.                                          |
-| Task 7  | Symmetric hardened CLI integration tests match both adapters              | Adapters are consumed through registry                      | Consistent; real provider smoke checks remain opt-in. |
+| Task 6  | Registry, environment, capability, model, and phase-schema tests match APIs | Types and helpers are consumed by adapters/orchestrator   | Consistent.                                          |
+| Task 7  | Hardened CLI, model-argument, and three-phase integration tests match adapters | Adapters are consumed through registry                  | Consistent; real provider smoke checks remain opt-in. |
 | Task 8  | Single/both/failure/cancel/idempotency/concurrency cases match services | Discord and startup consume outputs                         | Consistent.                                          |
-| Task 9  | Agreement/disagreement/failure/cap/cancellation/context cases match protocol | Persisted board feeds deterministic verdicts            | Consistent.                                          |
-| Task 10 | Authorization/handler/format cases match command surface                | Runtime is composed by Task 11                              | Consistent.                                          |
-| Task 11 | CLI and `/ask` plus `/debate` vertical-slice tests match composition     | Terminal milestone task                                     | Ruling recorded below for reply test boundary.       |
+| Task 9  | Phase/namespace/evidence/model/agreement/failure/cap cases match protocol | Persisted board feeds deterministic verdicts              | Consistent.                                          |
+| Task 10 | Authorization/model-choice/handler/format cases match command surface    | Runtime is composed by Task 11                              | Consistent.                                          |
+| Task 11 | CLI and `/models` plus `/ask`/`debate` vertical-slice tests match composition | Terminal milestone task                                 | Ruling recorded below for reply test boundary.       |
 
 Ruling: Task 1 must modify and extend the existing `.gitignore` rather than create it — worktree safety required `.worktrees/` to be committed before isolation — if wrong, the only cost is a one-line merge adjustment in Task 1.
 
@@ -91,11 +95,17 @@ Ruling: Move the first working `/debate` flow into the currently executed vertic
 
 Ruling: Debate turns are stateless by default and receive an explicit compact claim board rather than resuming provider-specific hidden sessions; this keeps Codex and Claude behavior symmetric, reproducible, and auditable — if wrong, debate coherence may be lower and provider session continuation can be added as an opt-in adapter capability later.
 
+Ruling: Use phase-discriminated provider schemas rather than one generic response. Initial alone creates run-local claim/evidence drafts; cross-examination and final positions cover supplied canonical claims, separate existing canonical evidence from same-response new evidence, and reject wrong-phase fields and all namespace/coverage/dangling/cross-run errors — if wrong, later-phase claim creation may be needed, and ADR-0006 records that evaluation trigger.
+
+Ruling: Expose allowlisted concrete provider model classes rather than abstract quality profiles or raw model strings. Config maps each class to an opaque CLI ID and optional effort, omission means provider default, provider selections remain fixed across a debate, and every run records class/requested ID/observed ID/effort — if wrong, ADR-0008 keeps the mapping reversible without changing the adapter boundary.
+
 ## Architecture amendment audit
 
 First review status: FAILED on 2026-08-23.
 
 Second review status: FAILED on 2026-08-23.
+
+Third review status: FAILED on 2026-08-23.
 
 Remediation status: PENDING RE-REVIEW.
 
@@ -103,6 +113,8 @@ The failed review found that the Codex SDK choice did not establish the required
 
 The first remediation pivots to symmetric hardened local CLIs, removes the SDK dependency, defines the exact final-stances-only verdict matrix and mechanical evidence resolution, adds bounded `DebateConfig`, makes board/run/round/final-position/verdict persistence reconstructible, assigns canonical claim IDs in host code while preserving every provider origin, aligns `/debate topic` plus optional `project`, and fixes the future README ADR link.
 
-The second remediation restores superseded ADR-0004 as historical record and creates ADR-0007 for the controller-authorized hardened design; defines Claude's exact bare/read-only/MCP-denied argument boundary and fail-closed version/flag probes; separates Codex file-schema transport from Claude's bounded inline schema; and adds deterministic canonical evidence IDs, many-to-one evidence origins, local-to-canonical claim/stance evidence joins, collision rules, and reconstruction tests. Architecture/remediation commits are `8565acca7238b842076e9ee8eb0f5eed9a1a533a`, `2f25462a2fdf6f367d87c6492c1523752f5664d5`, `21d85d80e78eb1ca476ca255675577e88572ccda`, and `218d8c06d67e8e49f02833da7ca926e02cab9b1e`. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
+The second remediation restores superseded ADR-0004 as historical record and creates ADR-0007 for the controller-authorized hardened design; defines Claude's exact bare/read-only/MCP-denied argument boundary and fail-closed version/flag probes; separates Codex file-schema transport from Claude's bounded inline schema; and adds deterministic canonical evidence IDs, many-to-one evidence origins, local-to-canonical claim/stance evidence joins, collision rules, and reconstruction tests. The third review established that this description overstated completeness because phase-specific provider namespaces/coverage and an explicit evidence-board FK were still absent.
 
-Second-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no active SDK dependency/instruction, stale active ADR link, personal identifier/path/email, project-specific sample identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004. Status remains PENDING RE-REVIEW.
+The third remediation defines exact initial/cross-examination/final provider schemas, forbids later claim creation, validates/translates existing versus same-response new evidence, adds orphan/cross-board evidence FKs/tests, and adds ADR-0008 plus concrete provider model-class selection across config, adapters, persistence, Discord, doctor, tests, and future public docs. Architecture/remediation history is `8565acca7238b842076e9ee8eb0f5eed9a1a533a`, `2f25462a2fdf6f367d87c6492c1523752f5664d5`, `21d85d80e78eb1ca476ca255675577e88572ccda`, `218d8c06d67e8e49f02833da7ca926e02cab9b1e`, `83b698b3bf0f53738dd98e7dcdf244a3157b9fe6`, and `12c1906cb65b697955732b0e5848a8843d2ee7d9`. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
+
+Third-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no active abstract profile vocabulary, SDK dependency/instruction, stale active ADR link, personal identifier/path/email, project-specific sample identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004. Status remains PENDING RE-REVIEW.

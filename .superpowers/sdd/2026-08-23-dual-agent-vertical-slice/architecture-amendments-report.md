@@ -2,7 +2,7 @@
 
 ## Result
 
-REMEDIATED — PENDING RE-REVIEW. The first and second architecture reviews failed. Their findings have been addressed in successive remediation commits, but this report does not claim review acceptance.
+REMEDIATED — PENDING RE-REVIEW. The first, second, and third architecture reviews failed. Their findings have been addressed in successive remediation commits, but this report does not claim review acceptance.
 
 Architecture amendment commit: `8565acca7238b842076e9ee8eb0f5eed9a1a533a` (`docs: strengthen architecture for structured debate`).
 
@@ -12,6 +12,8 @@ Architecture/remediation history:
 - `2f25462a2fdf6f367d87c6492c1523752f5664d5` — initial amendment report and ledger evidence.
 - `21d85d80e78eb1ca476ca255675577e88572ccda` — first-review remediation.
 - `218d8c06d67e8e49f02833da7ca926e02cab9b1e` — second-review architecture remediation.
+- `83b698b3bf0f53738dd98e7dcdf244a3157b9fe6` — second-remediation report and ledger evidence.
+- `12c1906cb65b697955732b0e5848a8843d2ee7d9` — third-review architecture remediation and model-selection decision.
 
 ## Changed files
 
@@ -23,6 +25,7 @@ Architecture/remediation history:
 - `docs/decisions/0005-observe-security-boundary.md`
 - `docs/decisions/0006-structured-deliberation.md`
 - `docs/decisions/0007-hardened-local-agent-clis.md`
+- `docs/decisions/0008-allowlisted-provider-model-selections.md`
 - `docs/superpowers/specs/2026-08-23-ai-workspace-design.md`
 - `docs/superpowers/plans/2026-08-23-dual-agent-vertical-slice.md`
 - `.superpowers/sdd/2026-08-23-dual-agent-vertical-slice/progress.md`
@@ -106,3 +109,30 @@ The spec, ADRs, plan types, migration sketch, repository interfaces, implementat
 Tracked-file scans found no stale active ADR-0004 hardened-CLI link, active SDK dependency or implementation instruction, personal machine path, personal name, email address, project-specific identifier, secret, or non-English public prose. Historical ADR-0004 references to the SDK are intentionally retained as superseded decision history.
 
 Review status after second remediation: PENDING RE-REVIEW.
+
+## Third failed review, correction, and remediation
+
+The third review found that the second-remediation report overstated evidence-reference completeness. Although canonical evidence IDs and origins were described, the provider contract still used one ambiguous stance shape: it did not separate phase-specific ID namespaces, prevent later claim creation, or define exact cross-examination/final board coverage. The migration sketch also omitted an explicit evidence-to-board foreign key. This report corrects that overstatement rather than treating the earlier check results as architecture acceptance.
+
+Commit `12c1906cb65b697955732b0e5848a8843d2ee7d9` defines non-interchangeable `InitialPhaseResponse`, `CrossExaminationPhaseResponse`, and `FinalPhaseResponse` schemas across the spec and implementation plan. Initial alone creates provider-local claim/evidence drafts. Later stances use canonical claims, separate existing canonical evidence from response-local new evidence, reject every namespace/coverage/dangling/cross-run error, and canonicalize new evidence before the next board. Earlier stances never substitute for an exact final position.
+
+The migration now explicitly references `claim_boards` from evidence rows, couples evidence to its session with a composite foreign key, couples origins to same-session runs, and couples stance/evidence joins to the same board. Planned migration/reconstruction tests reject orphan and cross-board evidence.
+
+The same commit adds ADR-0008 for allowlisted concrete provider model selections. Config maps public concrete classes to opaque CLI IDs and optional effort, provider default is omission/null, `/ask` and `/debate` have separate `codex_model` and `claude_model` choices, `/models` reports configured choices, and each run persists nullable class/requested model/observed model/effort. One selection per provider remains fixed across a debate; doctor probes flags without a paid inference call and reports the account-entitlement limitation. Abstract quality profiles, raw Discord model strings, hardcoded-only catalogs, shared choices, per-round switching, and silent fallback are rejected.
+
+## Third-remediation verification evidence
+
+| Command                          | Result |
+| -------------------------------- | ------ |
+| `pnpm install --frozen-lockfile` | PASS; lockfile was current. |
+| `pnpm format`                    | PASS; all formatter-covered files were unchanged. |
+| `pnpm format:check`              | PASS; all matched files use Prettier style. |
+| `pnpm lint`                      | PASS; exit 0. |
+| `pnpm typecheck`                 | PASS; exit 0. |
+| `pnpm test`                      | PASS; 1 test file and 1 test passed. |
+| `pnpm build`                     | PASS; exit 0. |
+| `git diff --check`               | PASS; no whitespace errors. |
+
+Tracked-file scans found no active abstract model-profile vocabulary, stale ADR-0008 filename, active SDK dependency/instruction, personal machine path/name/email, project-specific identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004.
+
+Review status after third remediation: PENDING RE-REVIEW.
