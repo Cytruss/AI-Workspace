@@ -12,7 +12,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Task 1: foundation      | PASS   | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass.         |
 | Task 2: configuration   | PASS   | Re-review accepted `168b9f0` and `b37f38a`; all findings addressed, no new Critical or Important issues. |
 | Task 3: project guard   | PASS   | Final scoped re-review accepted `64a45d4`, `9f6cfb5`, and `002067d`; all findings are resolved. |
-| Task 4: persistence     | FAIL   | Provider-identity fix `2e9c83f` is implemented and pending the next scoped re-review.        |
+| Task 4: persistence     | PASS   | Final scoped re-review accepted all implementation and remediation commits; no findings remain. |
 | Architecture amendments | PASS   | Fifth re-review accepted all remediation; no new Critical or Important findings. |
 
 Task 2: fix round 1/5 — reviewer found post-rename chmod could report failure after commit and chmod/cleanup errors were not correctly classified or preserved. Commit `b37f38a` makes destination rename the last fallible successful-path mutation, tolerates only documented unsupported/permission-denied POSIX chmod codes, rethrows unexpected chmod failures, and preserves primary write/chmod/rename errors if exact-temp cleanup fails. RED: 9 expected failures. GREEN: 27/27 regression tests; focused 32/32; full 33/33 with build, lint, typecheck, format check, and `git diff --check` clean. Status pending scoped re-review, not PASS.
@@ -32,6 +32,8 @@ Task 4: fix round 2/5 — first scoped re-review found final-position/verdict wr
 Task 4: fix round 3/5 — second scoped re-review found that nullable update paths still allowed a run's round link and finalized output link to be cleared, and debate-run loading silently accepted a missing round. Commit `e66c0cb` adds migration-v2 null-safe immutable-identity and write-once output triggers, a phase/link schema contract, ask-versus-debate runtime validation, and stable legacy corruption detection. Direct raw-SQL tests cover round/input/phase/session/purpose mutation, run and round output clearing/changing, a valid unlinked ask run, the valid null-to-matching-output sequence, and controlled legacy corruption. RED: 2 expected failures. GREEN: focused 41/41 plus adjacent 12/12, and full 118/118 with build, lint, typecheck, format check, and `git diff --check` clean. Status remains FAIL pending third scoped re-review, not PASS.
 
 Task 4: fix round 4/5 — third scoped re-review found `agent_id` missing from immutable run identity, so a completed provider could be relabeled after final graph persistence. Commit `2e9c83f` adds migration-v3 null-safe provider identity immutability and load-time producer checks for claim/evidence origins, stances, final positions, and the provider-specific verdict slots. Tests reproduce the exact completed-final-graph mutation, prove raw SQL rejection, and use controlled legacy fixtures to prove stable corruption detection for final-position, verdict, origin, and stance identity divergence. RED: 3 expected failures. GREEN: focused 47/47 and full 122/122 with build, lint, typecheck, format check, and `git diff --check` clean. Status remains FAIL pending the next scoped re-review, not PASS.
+
+Task 4: complete — final scoped re-review PASS; the provider-identity finding is resolved, all persistence remediation commits are accepted, and no new Critical or Important findings remain. Implementation history: `2a842f9`, `1b28a2a`, `ff38207`, `e66c0cb`, and `2e9c83f`.
 
 ## Pre-flight dependency scan
 
