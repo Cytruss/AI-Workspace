@@ -10,7 +10,7 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Work item               | Status      | Evidence                                                                 |
 | ----------------------- | ----------- | ------------------------------------------------------------------------ |
 | Task 1: foundation      | PASS        | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass. |
-| Architecture amendments | PENDING RE-REVIEW | First review failed; findings are remediated and awaiting review.    |
+| Architecture amendments | PENDING RE-REVIEW | First and second reviews failed; both remediation rounds await re-review. |
 
 ## Pre-flight dependency scan
 
@@ -75,9 +75,9 @@ Ruling: Retain `better-sqlite3` rather than raise the runtime floor and use `nod
 
 Superseded ruling from the failed first review: implement Codex through `@openai/codex-sdk@0.149.0`.
 
-Remediation ruling: invoke a separately installed Codex CLI through the project process runner, require `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, read-only sandboxing, and explicit working-directory flags, and fail closed if any capability is absent. The SDK exposes an abort signal but does not establish the complete descendant-tree ownership or ambient configuration/rule isolation required by v0.1; if those guarantees become available later, ADR-0004 defines the revisit test.
+Remediation ruling: invoke a separately installed Codex CLI through the project process runner, require `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, read-only sandboxing, and explicit working-directory flags, and fail closed if any capability is absent. The SDK exposes an abort signal but does not establish the complete descendant-tree ownership or ambient configuration/rule isolation required by v0.1; if those guarantees become available later, ADR-0007 defines the revisit test. ADR-0004 is retained as superseded history rather than rewritten in place.
 
-Ruling: Keep Claude on its separately installed CLI for Milestone 1 rather than bundle `@anthropic-ai/claude-agent-sdk`; Anthropic's quickstart directs third-party applications to API-key authentication and warns against offering claude.ai login/rate limits without approval, while the product goal is to reuse each operator's local Claude Code authentication — if wrong, the adapter can migrate to the official SDK later, at the cost of maintaining CLI parsing in the first release.
+Ruling: Keep Claude on its separately installed CLI for Milestone 1 rather than bundle `@anthropic-ai/claude-agent-sdk`; require fail-closed compatible-version and flag probing plus `--bare`, the exact Read/Glob/Grep allowlist, explicit `mcp__*` denial, plan permission mode, no session persistence, print mode, JSON output, and a bounded inline schema argument. Bash, Edit, Write, Notebook, ambient MCP tools, and shell interpolation remain unavailable — if wrong, the adapter can migrate to an official SDK later, at the cost of maintaining CLI parsing in the first release.
 
 Ruling: Task 3 must validate only Git-tracked symlinks using the index rather than recursively scanning the full working tree; recursive scanning would reject legitimate pnpm dependency links and scale with generated directories, while tracked source symlinks are the project-controlled isolation risk — if wrong, an untracked external symlink could remain readable, so native agent restrictions and the documented V0.1 read-isolation limitation remain necessary backstops.
 
@@ -95,10 +95,14 @@ Ruling: Debate turns are stateless by default and receive an explicit compact cl
 
 First review status: FAILED on 2026-08-23.
 
+Second review status: FAILED on 2026-08-23.
+
 Remediation status: PENDING RE-REVIEW.
 
 The failed review found that the Codex SDK choice did not establish the required process-tree and ambient-config isolation guarantees; verdict rules were not exhaustive; debate configuration was underspecified; persistence could not reconstruct every provider call; provider IDs and duplicate provenance were ambiguous; and command/documentation details were inconsistent.
 
-The remediation pivots to symmetric hardened local CLIs, removes the SDK dependency, defines the exact final-stances-only verdict matrix and mechanical evidence resolution, adds bounded `DebateConfig`, makes board/run/round/final-position/verdict persistence reconstructible, assigns canonical IDs in host code while preserving every provider origin, aligns `/debate topic` plus optional `project`, and fixes the future README ADR link. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
+The first remediation pivots to symmetric hardened local CLIs, removes the SDK dependency, defines the exact final-stances-only verdict matrix and mechanical evidence resolution, adds bounded `DebateConfig`, makes board/run/round/final-position/verdict persistence reconstructible, assigns canonical claim IDs in host code while preserving every provider origin, aligns `/debate topic` plus optional `project`, and fixes the future README ADR link.
 
-Remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no active SDK dependency/instruction, stale ADR link, personal identifier/path/email, project-specific sample identifier, secret, or Polish-language public content. Status remains PENDING RE-REVIEW.
+The second remediation restores superseded ADR-0004 as historical record and creates ADR-0007 for the controller-authorized hardened design; defines Claude's exact bare/read-only/MCP-denied argument boundary and fail-closed version/flag probes; separates Codex file-schema transport from Claude's bounded inline schema; and adds deterministic canonical evidence IDs, many-to-one evidence origins, local-to-canonical claim/stance evidence joins, collision rules, and reconstruction tests. Architecture/remediation commits are `8565acca7238b842076e9ee8eb0f5eed9a1a533a`, `2f25462a2fdf6f367d87c6492c1523752f5664d5`, `21d85d80e78eb1ca476ca255675577e88572ccda`, and `218d8c06d67e8e49f02833da7ca926e02cab9b1e`. Final local evidence is recorded in the architecture amendment report; acceptance remains pending an independent re-review.
+
+Second-remediation verification: `pnpm install --frozen-lockfile`, `pnpm format`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check` exited 0; Vitest reported one passing file and one passing test. Repository scans found no active SDK dependency/instruction, stale active ADR link, personal identifier/path/email, project-specific sample identifier, secret, or non-English public prose. Historical SDK text remains only in superseded ADR-0004. Status remains PENDING RE-REVIEW.
