@@ -106,6 +106,8 @@ Claude requires `--bare`, `--tools "Read,Glob,Grep"`, `--disallowedTools "mcp__*
 
 Capability and minimum-version probing independently verifies every essential provider flag and fails closed if any safety, customization-isolation, MCP-denial, session-persistence, or structured-output capability is absent.
 
+Both adapters also capability-probe the provider-specific model and effort argument mechanism described by ADR-0008. A configured concrete selection is resolved before process creation and appended as direct argument-array elements; omission appends nothing and uses provider default. The host never invokes a shell, passes an unallowlisted Discord value, or silently retries with a different model after an unsupported/unauthorized failure.
+
 ## Configuration and Local Data
 
 The setup command creates a validated JSON configuration in the operating system's per-user application-data directory. The location follows platform conventions rather than repository-relative or hardcoded home paths. The configuration contains:
@@ -113,6 +115,7 @@ The setup command creates a validated JSON configuration in the operating system
 - Discord guild and authorized user identifiers.
 - Registered project IDs, display names, and absolute roots.
 - Available agent adapters and optional Codex and Claude executable overrides.
+- Provider-specific concrete model-selection allowlists from [ADR-0008](../../decisions/0008-allowlisted-provider-model-selections.md). Each provider has 0 through 25 unique public classes mapped to opaque non-empty CLI model IDs and optional bounded effort strings. `defaultModel`, when set, resolves to a configured class; when unset, omission means provider default. Portable initial configuration has no selections and no default model.
 - Default agent, optional presentation polisher, round limit, timeouts, output limits, and concurrency.
 - Debate limits: `maxRounds` defaults to `3` and is bounded from `1` through `5`; `maxBoardClaims` defaults to `40` and is bounded from `2` through `200`; `maxBoardBytes` defaults to `65536` and is bounded from `4096` through `262144`.
 - Logging level and local data-retention settings.
@@ -127,6 +130,8 @@ interface DebateConfig {
 }
 ```
 
+Model IDs and effort values are operator configuration, not entitlement assertions. Suggested concrete classes are Codex `sol`, `terra`, and `luna` resolving to `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`, and Claude `opus`, `fable`, `sonnet`, and `haiku` resolving to their official CLI aliases. Accounts may not expose every suggested model, so these examples are never inserted automatically.
+
 Secrets are loaded from the process environment or an untracked local `.env` file. The repository contains `.env.example` with example variable names and empty values only. Secrets are never persisted in SQLite or included in logs, prompts, diagnostics, or Discord output.
 
 The project registry is configuration, not application logic. V0.1 accepts existing Git worktrees only. Each root is canonicalized and stored explicitly; directory discovery never scans a user's home directory.
@@ -138,43 +143,51 @@ Active-project selection is scoped by Discord guild, channel, and user. One user
 V0.1 exposes this minimal command set:
 
 - `/projects`: list configured projects and adapter availability.
+- `/models`: list each provider's configured concrete model classes and whether omission uses provider default.
 - `/switch project:<id>`: select the active project for the invoking user and channel.
-- `/ask agent:<codex|claude|both> question:<text>`: run one or two independent analyses.
-- `/debate topic:<text> project:<id?>`: run bounded Codex/Claude deliberation and deterministic verdict derivation against the optional project or the active project.
+- `/ask agent:<codex|claude|both> question:<text> codex_model:<class?> claude_model:<class?>`: run one or two independent analyses with separate optional concrete provider model classes.
+- `/debate topic:<text> project:<id?> codex_model:<class?> claude_model:<class?>`: run bounded Codex/Claude deliberation with separate optional concrete provider model classes and deterministic verdict derivation against the optional project or the active project.
 - `/status`: show active and recent runs without exposing prompts or secrets to unauthorized users.
 - `/stop run:<id|current>`: cancel an authorized active run.
 
 Discord interaction acknowledgements are sent before the platform deadline. Long results are split into readable messages or attached as a text file while retaining a concise summary in the channel.
 
+At command registration, each model option contains only that provider's configured classes and is omitted when its allowlist is empty; the handler still revalidates submitted values to reject stale or forged interactions before orchestration.
+
 ## Request Flow
 
 1. Discord authenticates the interaction; AI Workspace verifies guild, user, command, and project authorization.
 2. The project service resolves the user's active project and validates its canonical root.
-3. The orchestrator creates a persisted session and run records.
-4. The context builder creates a minimal prompt from project metadata, the current request, and an explicit compact claim board when deliberation state is required. V0.1 does not retrieve semantic memory.
-5. The permission service checks the requested mode and adapter capabilities.
-6. The adapter directly spawns the selected CLI through the bounded process runner with an argument array and a restricted environment.
-7. The process runner bounds stdout and stderr, applies the timeout, listens for cancellation, and terminates the complete descendant process tree.
-8. The adapter normalizes the response. Persistence records the outcome before Discord formatting begins.
-9. The formatter returns the response, partial result, or actionable diagnostic.
+3. The orchestrator resolves each requested provider model class against its configured allowlist before creating a process. Unknown or disallowed classes fail without starting an agent. Omitted options use `defaultModel` when configured or provider default when unset.
+4. The orchestrator creates persisted session and run records. A debate freezes one resolved selection per provider for all initial, cross-examination, and final calls; v0.1 never switches models between rounds.
+5. The context builder creates a minimal prompt from project metadata, the current request, and an explicit compact claim board when deliberation state is required. V0.1 does not retrieve semantic memory.
+6. The permission service checks the requested mode and adapter capabilities.
+7. The adapter directly spawns the selected CLI through the bounded process runner with an argument array and a restricted environment.
+8. The process runner bounds stdout and stderr, applies the timeout, listens for cancellation, and terminates the complete descendant process tree.
+9. The adapter normalizes the response. Persistence records the outcome before Discord formatting begins.
+10. The formatter returns the response, partial result, or actionable diagnostic.
 
 Agent-to-agent communication always passes through the orchestrator. Agents never invoke each other directly. Every provider call is stateless by default and receives all required context explicitly; correctness never depends on hidden provider session history.
 
 ## Structured Deliberation Protocol
 
-The deliberation engine owns a shared claim board and uses stable schemas for claims, evidence references, stances, rounds, final positions, and immutable verdicts. `DebateConfig` supplies `maxRounds`, `maxBoardClaims`, and `maxBoardBytes` with the defaults and bounds defined above; every debate records the effective values it used.
+The deliberation engine owns a shared claim board and three distinct discriminated provider schemas: `InitialPhaseResponse`, `CrossExaminationPhaseResponse`, and `FinalPhaseResponse`. Provider drafts and provider-local IDs are different types from host-owned canonical claim, evidence, stance, and final-position records. A response for one phase cannot validate as another phase. `DebateConfig` supplies `maxRounds`, `maxBoardClaims`, and `maxBoardBytes` with the defaults and bounds defined above; every debate records the effective values it used.
 
 ### Initial claims
 
-Codex and Claude receive the same project, topic, evidence rules, and response schema concurrently. Neither receives the other's response. Each independently returns material claims with provider-local claim references, evidence references, assumptions, risks, and a proposed position. Providers never assign canonical claim IDs.
+Codex and Claude receive the same project, topic, evidence rules, and `InitialPhaseResponse` schema concurrently. Neither receives the other's response. Each independently returns material claim drafts with provider-local claim IDs, evidence drafts with provider-local evidence IDs, assumptions, risks, and a proposed position. Every claim-to-evidence link uses an evidence ID declared exactly once in the same response. Providers never assign canonical IDs.
 
 After deterministic normalization and sorting, the orchestrator assigns monotonically ordered canonical IDs such as `claim-0001`. Exact normalized duplicates merge into one canonical claim while retaining every origin as `(agent, run, provider-local claim reference)` provenance. Provider-local reference collisions within a run fail schema validation.
 
-Provider evidence IDs are also local only. After claim canonicalization, host code sorts evidence by a deterministic tuple of normalized tracked path, line range, expected content hash, agent ID, run ID, and provider-local evidence ID, then assigns `evidence-0001`, `evidence-0002`, and so on. Mechanically identical path/range/hash references merge while preserving every `(agent, run, provider-local evidence ID)` origin. Host code translates every claim-to-evidence and stance-to-evidence reference to canonical IDs. Cross-provider reuse of the same local ID is harmless; collisions within one provider run fail validation. Invalid and missing references remain canonical auditable records rather than being discarded.
+Provider evidence IDs are also local only. After claim canonicalization, host code sorts evidence by a deterministic tuple of normalized tracked path, line range, expected content hash, agent ID, run ID, and provider-local evidence ID, then assigns `evidence-0001`, `evidence-0002`, and so on. Mechanically identical path/range/hash references merge while preserving every `(agent, run, provider-local evidence ID)` origin. Host code translates every initial claim-to-evidence reference to canonical IDs. Cross-provider reuse of the same local ID is harmless; collisions within one provider run fail validation. Invalid and missing references remain canonical auditable records rather than being discarded.
+
+Initial response processing is the only operation that may add claims in v0.1. Cross-examination and final schemas have no claim-draft variant and explicitly reject a `claims` field. A later agent disagrees through a `DISPUTE` or `UNCERTAIN` rationale and evidence against an existing canonical claim. This is a deliberate bounded-scope choice; revisit it if evaluation shows that agents cannot express material counterclaims against the initial board without adding claims in later phases.
 
 ### Shared claim board and cross-examination
 
-The orchestrator normalizes and persists both initial responses into a compact claim board. Each agent receives that same explicit board and records exactly one stance on every material claim it reviews: `ACCEPT`, `DISPUTE`, or `UNCERTAIN`. A stance includes reasoning and may reference evidence; it cannot rewrite the original claim.
+The orchestrator normalizes and persists both initial responses into a compact claim board. Each cross-examination call receives an explicit review set from that board and must return a `CrossExaminationPhaseResponse`. It contains exactly one `ACCEPT`, `DISPUTE`, or `UNCERTAIN` stance for each supplied review-set claim ID, including claims originating from the other provider, with no missing, extra, or duplicate claim IDs.
+
+Each stance separates `existingEvidenceIds`, which must be canonical evidence IDs present in the input board, from `newEvidenceLocalIds`, which must each resolve exactly once against `newEvidence` declared in that same response. New evidence uses run-local IDs, is mechanically validated and canonicalized by the host, and has all local references translated before the next board is persisted. Reject unknown IDs, missing or duplicate declarations, wrong local/canonical namespaces, dangling references, references to another run's local IDs, and duplicate claim stances. A stance cannot rewrite a claim.
 
 ### Bounded resolution rounds
 
@@ -186,7 +199,7 @@ Host code resolves evidence mechanically and separately from verdict classificat
 
 ### Final positions and verdicts
 
-Each agent independently submits exactly one final stance per canonical material claim. Earlier-round stances remain audit history and never affect the final classification. Pure code applies this exhaustive rule only to the two successful agents' final stances:
+Each agent independently submits a `FinalPhaseResponse` with exactly one final stance for every canonical claim in the supplied final board, including claims initially created by the other provider. Final stances use the same separated `existingEvidenceIds`, response-local `newEvidenceLocalIds`, and `newEvidence` validation/canonicalization rules as cross-examination. Extra, missing, duplicate, dangling, cross-run, or wrong-namespace references reject the entire response. Earlier-round stances remain audit history, never fill a missing final stance, and never affect the final classification. Pure code applies this exhaustive rule only to the two successful agents' final stances:
 
 - `ACCEPT` + `ACCEPT` = `CONSENSUS`.
 - `ACCEPT` + `DISPUTE`, in either order, = `DISAGREEMENT`.
@@ -245,7 +258,7 @@ SQLite is stored in the per-user application-data directory and migrated transac
 - `evidence_origins`: many-to-one provenance from canonical evidence to agent, run, and provider-local evidence ID.
 - `claim_evidence` and `stance_evidence`: translated canonical many-to-many links from claims and stances to evidence.
 - `debate_rounds`: phase, ordering, completion state, and foreign keys to exact input and output board snapshots.
-- `agent_runs`: adapter, round, phase/purpose, exact bounded request/response payloads, input/output board references, status, duration, exit metadata, and bounded diagnostics.
+- `agent_runs`: adapter, nullable selected concrete class, requested/resolved CLI model ID, optional observed model ID, effort, round, phase/purpose, exact bounded discriminated request/response payloads, input/output board references, status, duration, exit metadata, and bounded diagnostics.
 - `stances`: `ACCEPT`, `DISPUTE`, or `UNCERTAIN` audit-history records linked to the producing run, round, and canonical claim.
 - `final_positions`: each agent's independent final stances linked to the producing run, round, and canonical claims.
 - `verdicts`: immutable deterministic classifications, evidence support, provenance, stance/run links, counts, and content hash.
@@ -259,6 +272,7 @@ Long-term semantic memory for facts, hypotheses, experiments, decisions, rejecte
 
 - `/ask` for an unavailable agent returns setup instructions without creating a child process.
 - `/ask both` runs available adapters independently and returns a successful response even when the other adapter fails.
+- Unknown/disallowed model classes fail before process creation. Unsupported or unauthorized configured model failures produce provider-specific actionable diagnostics and never retry with or silently fall back to another selection.
 - `/debate` requires both adapters at the start and reports a partial debate if failure occurs after useful work exists.
 - Discord delivery failures do not discard persisted results; `/status` can locate the completed session.
 - SQLite migration or corruption errors prevent startup rather than running without persistence.
@@ -269,7 +283,7 @@ Long-term semantic memory for facts, hypotheses, experiments, decisions, rejecte
 
 Vitest is used for unit and integration tests. Fake Node-based agent executables simulate successful structured output, streaming output, malformed data, authentication failures, non-zero exits, hangs, oversized output, ignored termination signals, and spawned child processes.
 
-Unit tests cover configuration bounds, authorization, path validation, canonical claim/evidence assignment, cross-provider ID reuse, within-run collisions, duplicate merges and origin preservation, local-to-canonical translation, deliberation state transitions, the exhaustive verdict matrix, mechanical evidence resolution, immutable polishing checks, bounded context, error mapping, formatting, and redaction. Integration tests cover SQLite migrations and complete call reconstruction, ambient MCP denial, process-tree cancellation, timeouts, output limits, and both CLI adapters' structured output and distinct schema transports. Discord tests use a transport boundary rather than a live server.
+Unit tests cover configuration selection count/duplicates/defaults, separate provider model selection, argument arrays, authorization, path validation, all three phase-discriminated schemas, exact board coverage, other-provider claims, every local/canonical ID namespace error, canonical claim/evidence assignment, cross-provider ID reuse, within-run collisions, duplicate merges and origin preservation, new-evidence translation, deliberation state transitions, the exhaustive verdict matrix, mechanical evidence resolution, immutable polishing checks, bounded context, error mapping, formatting, and redaction. Integration tests cover persisted selection reproducibility, one-selection-per-provider-per-debate enforcement, SQLite migrations and complete phase-specific call reconstruction, orphan/cross-board evidence rejection, ambient MCP denial, process-tree cancellation, timeouts, output limits, and both CLI adapters' three structured-output schemas and distinct schema transports. Discord tests use a transport boundary rather than a live server.
 
 CI runs on Windows, macOS, and Linux using the supported Node version. Tests requiring real accounts are opt-in smoke tests and never run in public CI. Release checks include formatting, linting, type checking, unit tests, integration tests, secret scanning, and a clean install from a fresh clone.
 

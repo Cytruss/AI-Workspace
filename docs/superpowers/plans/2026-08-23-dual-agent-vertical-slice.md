@@ -4,7 +4,7 @@
 
 **Goal:** Build Milestone 1: a locally hosted Discord bot that can run Codex, Claude, or both against an authorized Git project in enforced source-non-modifying mode; conduct structured, auditable `/debate` deliberations; persist results in SQLite; report status; and cancel active work.
 
-**Architecture:** Implement a TypeScript modular monolith whose domain services depend on explicit ports for agents, persistence, processes, and Discord. Invoke separately installed Codex and Claude Code CLIs through the same bounded process runner while keeping provider arguments inside their adapters, as accepted in [ADR-0007](../../decisions/0007-hardened-local-agent-clis.md). Keep Discord-specific objects at the transport edge, validate source-non-modification capabilities before every run, and pass a compact persisted claim board into stateless provider calls. Use fake CLIs and transport ports for deterministic cross-platform tests.
+**Architecture:** Implement a TypeScript modular monolith whose domain services depend on explicit ports for agents, persistence, processes, and Discord. Invoke separately installed Codex and Claude Code CLIs through the same bounded process runner while keeping provider arguments inside their adapters, as accepted in [ADR-0007](../../decisions/0007-hardened-local-agent-clis.md). Resolve provider-specific concrete model classes through the configured allowlists from [ADR-0008](../../decisions/0008-allowlisted-provider-model-selections.md). Keep Discord-specific objects at the transport edge, validate source-non-modification capabilities before every run, and pass a compact persisted claim board into stateless provider calls. Use fake CLIs and transport ports for deterministic cross-platform tests.
 
 **Tech Stack:** Node.js 22+, pnpm 11.19.0, TypeScript 5.9.3, discord.js 14.27.0, Zod 4.4.3, better-sqlite3 13.0.3, dotenv 17.4.2, Vitest 4.1.11, ESLint 10.9.0, Prettier 3.9.6, tsx 4.23.12.
 
@@ -200,7 +200,7 @@ git commit -m "chore: initialize TypeScript project"
 
 **Interfaces:**
 - Consumes: Node filesystem and environment APIs.
-- Produces: `AppConfig`, `ProjectConfig`, `AgentConfig`, `DebateConfig`, `getAppPaths()`, `loadConfig()`, and `saveConfig()`.
+- Produces: `AppConfig`, `ProjectConfig`, `AgentConfig`, `ModelSelection`, `DebateConfig`, `getAppPaths()`, `loadConfig()`, and `saveConfig()`.
 
 - [ ] **Step 1: Write failing path and schema tests**
 
@@ -221,7 +221,7 @@ describe("getAppPaths", () => {
 });
 ```
 
-Add `load-config.test.ts` cases for valid JSON, duplicate project IDs, a non-absolute project root, empty Discord allowlists, invalid execution mode, a missing token environment variable, all debate defaults, and every lower/upper boundary plus one-below/one-above rejection for each debate limit.
+Add `load-config.test.ts` cases for valid JSON, duplicate project IDs, a non-absolute project root, empty Discord allowlists, invalid execution mode, a missing token environment variable, all debate defaults, and every lower/upper boundary plus one-below/one-above rejection for each debate limit. Model-selection cases cover 0 and 25 entries, rejection at 26, duplicate classes, an unknown `defaultModel`, empty/oversized CLI model IDs and efforts, opaque provider-specific IDs, the concrete example mappings (Codex `sol`/`terra`/`luna`, Claude `opus`/`fable`/`sonnet`/`haiku`), and the portable default with an empty selection list and unset `defaultModel`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -240,10 +240,23 @@ export const ProjectConfigSchema = z.object({
   root: z.string().min(1),
 });
 
+const ModelClassSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
+export const ModelSelectionSchema = z.object({
+  class: ModelClassSchema,
+  cliModelId: z.string().min(1).max(200),
+  effort: z.string().min(1).max(32).optional(),
+});
+
+export const ModelSelectionsSchema = z.object({
+  defaultModel: ModelClassSchema.optional(),
+  selections: z.array(ModelSelectionSchema).max(25).default([]),
+});
+
 export const AgentConfigSchema = z.object({
   command: z.string().min(1),
   timeoutMs: z.number().int().min(1_000).max(3_600_000).default(300_000),
   maxOutputBytes: z.number().int().min(1_024).max(10_485_760).default(1_048_576),
+  models: ModelSelectionsSchema.default({ selections: [] }),
 });
 
 export const DebateConfigSchema = z.object({
@@ -279,10 +292,11 @@ export const AppConfigSchema = z.object({
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
+export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
 export type DebateConfig = z.infer<typeof DebateConfigSchema>;
 ```
 
-After parsing, refine that project IDs are unique and every root is absolute using `node:path.isAbsolute`.
+After parsing, refine that project IDs are unique and every root is absolute using `node:path.isAbsolute`. For each provider, require unique concrete model classes and require `defaultModel`, when set, to resolve to a configured selection. Unset `defaultModel` means provider default and does not create a synthetic class. Treat configured CLI model IDs and effort strings as opaque bounded values rather than hardcoded catalogs or entitlement claims.
 
 - [ ] **Step 4: Implement portable paths and config I/O**
 
@@ -434,7 +448,7 @@ git commit -m "feat: enforce authorized Git projects"
 
 - [ ] **Step 1: Write failing migration and repository tests**
 
-Use an in-memory database and assert foreign keys, migration idempotency, project upsert, active-project scope, session transitions, messages, agent runs, errors, and complete deliberation round trips. The deliberation tests must reconstruct every provider call's exact bounded request, response, phase, purpose, input board, output board, claim origins, evidence origins, evidence resolution, translated claim/stance evidence links, stances, final positions, and immutable verdicts without relying on message transcripts. Add tests for broken cross-session/version/run references, content-hash mismatch, duplicate provider-local claim or evidence origin within one run, cross-provider reuse of the same evidence-local ID, two exact duplicate claims from different agents merging without losing either origin, and mechanically identical evidence merging without losing either origin. Include this state test:
+Use an in-memory database and assert foreign keys, migration idempotency, project upsert, active-project scope, session transitions, messages, agent runs, errors, and complete deliberation round trips. The deliberation tests must reconstruct every provider call's nullable concrete model class/requested model ID/observed model ID/effort, exact bounded phase-discriminated request and response, purpose, input board, output board, claim origins, evidence origins, evidence resolution, translated claim/stance evidence links, stances, final positions, and immutable report without relying on message transcripts. Add tests for provider-default null persistence, explicit model persistence across every debate phase, invalid partial model-selection columns, broken cross-session/version/run references, an evidence row whose board does not exist, claim/stance evidence linked across boards, an evidence origin whose run belongs to another session, content-hash mismatch, duplicate provider-local claim or evidence origin within one run, cross-provider reuse of the same evidence-local ID, two exact duplicate claims from different agents merging without losing either origin, and mechanically identical evidence merging without losing either origin. Include this state test:
 
 ```ts
 const session = sessions.create({
@@ -497,11 +511,14 @@ CREATE TABLE debate_rounds (
 );
 CREATE TABLE agent_runs (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), agent_id TEXT NOT NULL,
+  model_class TEXT, requested_model_id TEXT, observed_model_id TEXT, resolved_effort TEXT,
   round_id TEXT, phase TEXT NOT NULL, purpose TEXT NOT NULL,
   input_board_id TEXT, output_board_id TEXT,
   request_json TEXT NOT NULL, response_json TEXT, status TEXT NOT NULL,
   exit_code INTEGER, duration_ms INTEGER NOT NULL, diagnostics_json TEXT NOT NULL,
   created_at TEXT NOT NULL, finished_at TEXT, UNIQUE (id, session_id),
+  CHECK ((model_class IS NULL AND requested_model_id IS NULL AND resolved_effort IS NULL)
+    OR (model_class IS NOT NULL AND requested_model_id IS NOT NULL)),
   FOREIGN KEY (round_id, session_id) REFERENCES debate_rounds(id, session_id),
   FOREIGN KEY (input_board_id, session_id) REFERENCES claim_boards(id, session_id),
   FOREIGN KEY (output_board_id, session_id) REFERENCES claim_boards(id, session_id)
@@ -519,16 +536,22 @@ CREATE TABLE claim_origins (
   UNIQUE (agent_run_id, provider_local_id)
 );
 CREATE TABLE evidence_references (
-  board_id TEXT NOT NULL, canonical_id TEXT NOT NULL,
+  board_id TEXT NOT NULL, session_id TEXT NOT NULL, canonical_id TEXT NOT NULL,
   tracked_path TEXT NOT NULL, line_start INTEGER, line_end INTEGER, content_hash TEXT,
   resolution TEXT NOT NULL, resolved_hash TEXT,
-  PRIMARY KEY (board_id, canonical_id)
+  PRIMARY KEY (board_id, canonical_id),
+  UNIQUE (board_id, canonical_id, session_id),
+  FOREIGN KEY (board_id) REFERENCES claim_boards(id),
+  FOREIGN KEY (board_id, session_id) REFERENCES claim_boards(id, session_id)
 );
 CREATE TABLE evidence_origins (
-  id TEXT PRIMARY KEY, board_id TEXT NOT NULL, canonical_evidence_id TEXT NOT NULL,
+  id TEXT PRIMARY KEY, board_id TEXT NOT NULL, session_id TEXT NOT NULL,
+  canonical_evidence_id TEXT NOT NULL,
   agent_id TEXT NOT NULL, agent_run_id TEXT NOT NULL REFERENCES agent_runs(id),
   provider_local_id TEXT NOT NULL,
-  FOREIGN KEY (board_id, canonical_evidence_id) REFERENCES evidence_references(board_id, canonical_id),
+  FOREIGN KEY (board_id, canonical_evidence_id, session_id)
+    REFERENCES evidence_references(board_id, canonical_id, session_id),
+  FOREIGN KEY (agent_run_id, session_id) REFERENCES agent_runs(id, session_id),
   UNIQUE (agent_run_id, provider_local_id)
 );
 CREATE TABLE claim_evidence (
@@ -543,11 +566,12 @@ CREATE TABLE stances (
   agent_id TEXT NOT NULL,
   stance TEXT NOT NULL, reasoning TEXT NOT NULL,
   FOREIGN KEY (board_id, canonical_claim_id) REFERENCES claims(board_id, canonical_id),
-  UNIQUE (canonical_claim_id, round_id, agent_id)
+  UNIQUE (canonical_claim_id, round_id, agent_id), UNIQUE (id, board_id)
 );
 CREATE TABLE stance_evidence (
-  stance_id TEXT NOT NULL REFERENCES stances(id),
+  stance_id TEXT NOT NULL,
   board_id TEXT NOT NULL, canonical_evidence_id TEXT NOT NULL,
+  FOREIGN KEY (stance_id, board_id) REFERENCES stances(id, board_id),
   FOREIGN KEY (board_id, canonical_evidence_id) REFERENCES evidence_references(board_id, canonical_id),
   PRIMARY KEY (stance_id, canonical_evidence_id)
 );
@@ -632,7 +656,7 @@ export class DeliberationRepository {
 }
 ```
 
-Serialize claim-board snapshots and verdicts with canonical key ordering, enforce configured board byte/claim limits before insertion, and verify their SHA-256 content hashes on load. Guard invalid transitions and all cross-session links in one transaction; constrain stances to `ACCEPT`, `DISPUTE`, or `UNCERTAIN`, evidence resolution to `VERIFIED`, `INVALID`, or `MISSING`, and verdict classification to `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, or `UNRESOLVED`. Generate opaque record IDs with `randomUUID()`; canonical claim and evidence IDs are assigned only by Task 9.
+Serialize claim-board snapshots and verdicts with canonical key ordering, enforce configured board byte/claim limits before insertion, and verify their SHA-256 content hashes on load. Persist every exact phase-discriminated provider response in its producing run before persisting the translated output board and rendered report. Guard invalid transitions and all cross-session/board links in one transaction; database foreign keys must reject orphan evidence boards, origins from runs in another session, and claim/stance evidence joins across boards. Constrain stances to `ACCEPT`, `DISPUTE`, or `UNCERTAIN`, evidence resolution to `VERIFIED`, `INVALID`, or `MISSING`, and verdict classification to `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, or `UNRESOLVED`. Generate opaque record IDs with `randomUUID()`; canonical claim and evidence IDs are assigned only by Task 9.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -744,12 +768,12 @@ git commit -m "feat: add cancellable process runner"
 - Create: `tests/unit/agents/structured-response.test.ts`
 
 **Interfaces:**
-- Consumes: `ProcessResult` and Task 2 agent settings.
-- Produces: the exact `AgentAdapter` contract from the spec, `AgentRegistry`, `buildSafeEnvironment()`, `requireHelpFlags()`, and stable normalized schemas for provider-local claims, canonical claims, evidence references and resolution, stances, rounds, final positions, and immutable verdicts.
+- Consumes: `ProcessResult` and Task 2 agent/model-selection settings.
+- Produces: the exact `AgentAdapter` contract from the spec, `AgentRegistry`, `buildSafeEnvironment()`, `requireHelpFlags()`, concrete model-selection resolution, three phase-discriminated provider schemas, and stable normalized host schemas for canonical claims, evidence resolution, stances, rounds, final positions, and immutable verdicts.
 
 - [ ] **Step 1: Write failing contract-service tests**
 
-Test registry lookup, duplicate adapters, `both` ordering, unavailable adapters, safe environment preservation, secret removal, mandatory help flags, strict known-field validation, unknown-field tolerance at provider boundaries, duplicate provider-local ID rejection, and stable normalization of claim, evidence, stance, round, final-position, and verdict data:
+Test registry lookup, duplicate adapters, `both` ordering, unavailable adapters, safe environment preservation, secret removal, mandatory help flags, omitted/default/explicit concrete model resolution, and stable normalization of canonical claim, evidence, stance, round, final-position, and verdict data. Test each phase schema independently: correct discriminant, rejection of another phase's reserved fields, and forward-compatible unknown fields that are not reserved by another phase. Initial tests require unique local claim/evidence IDs and exactly resolved local evidence links. Cross-examination tests accept a canonical claim originating from the other provider and reject unknown/missing/duplicate claims, a local claim ID in the canonical namespace, unknown or duplicate existing canonical evidence IDs, duplicate new-evidence declarations, canonical IDs in the local namespace, and dangling/cross-run new-evidence IDs. Final tests enforce exactly one stance for every canonical board claim and reject extra/missing/duplicate claims plus the same evidence namespace errors.
 
 ```ts
 expect(() => requireHelpFlags("Usage: tool --json", ["--json", "--read-only"]))
@@ -764,7 +788,7 @@ Expected: FAIL because shared agent modules do not exist.
 
 - [ ] **Step 3: Define agent types exactly as the approved spec**
 
-Create `AgentId`, `AgentCapabilities`, `AgentRequest`, `AgentResult`, and `AgentAdapter`. `AgentRequest` includes an optional explicit response schema; `AgentResult.structured` contains normalized data rather than provider-specific payloads. Add:
+Create `AgentId`, `AgentCapabilities`, `AgentRequest`, `AgentResult`, and `AgentAdapter`. `AgentCapabilities` separately records model-option and effort-option support for fail-closed doctor output. `AgentRequest` carries a required phase-specific response schema for deliberation plus a pre-resolved concrete provider model selection; `AgentResult.structured` contains the matching validated draft or normalized ask data rather than an untyped provider payload. Add:
 
 ```ts
 export type BuiltInAgentId = "codex" | "claude";
@@ -781,19 +805,29 @@ export class AgentRegistry {
 Define and export stable Zod schemas and inferred types for:
 
 ```ts
-ProviderEvidenceReference = { localId: string; trackedPath: string; lineStart?: number; lineEnd?: number; contentHash?: string };
-ProviderClaim = { localId: string; text: string; material: boolean; evidenceLocalIds: string[] };
+ProviderClaimLocalId = string & Brand<"ProviderClaimLocalId">;
+ProviderEvidenceLocalId = string & Brand<"ProviderEvidenceLocalId">;
+CanonicalClaimId = string & Brand<"CanonicalClaimId">;
+CanonicalEvidenceId = string & Brand<"CanonicalEvidenceId">;
+ProviderEvidenceDraft = { localId: ProviderEvidenceLocalId; trackedPath: string; lineStart?: number; lineEnd?: number; contentHash?: string };
+InitialClaimDraft = { localId: ProviderClaimLocalId; text: string; material: boolean; evidenceLocalIds: ProviderEvidenceLocalId[] };
+InitialPhaseResponse = { phase: "initial"; claims: InitialClaimDraft[]; evidence: ProviderEvidenceDraft[] };
+ProviderStanceDraft = { claimId: CanonicalClaimId; value: "ACCEPT" | "DISPUTE" | "UNCERTAIN"; reasoning: string; existingEvidenceIds: CanonicalEvidenceId[]; newEvidenceLocalIds: ProviderEvidenceLocalId[] };
+CrossExaminationPhaseResponse = { phase: "cross-examination"; stances: ProviderStanceDraft[]; newEvidence: ProviderEvidenceDraft[] };
+FinalPhaseResponse = { phase: "final"; stances: ProviderStanceDraft[]; newEvidence: ProviderEvidenceDraft[] };
+ProviderPhaseResponse = InitialPhaseResponse | CrossExaminationPhaseResponse | FinalPhaseResponse;
 ClaimOrigin = { agentId: AgentId; agentRunId: string; providerLocalId: string };
-CanonicalClaim = { id: string; text: string; material: boolean; evidenceIds: string[]; origins: ClaimOrigin[] };
+CanonicalClaim = { id: CanonicalClaimId; text: string; material: boolean; evidenceIds: CanonicalEvidenceId[]; origins: ClaimOrigin[] };
 EvidenceOrigin = { agentId: AgentId; agentRunId: string; providerLocalId: string };
-CanonicalEvidence = { id: string; status: "VERIFIED" | "INVALID" | "MISSING"; trackedPath: string; lineStart?: number; lineEnd?: number; expectedHash?: string; resolvedHash?: string; origins: EvidenceOrigin[] };
-Stance = { claimId: string; value: "ACCEPT" | "DISPUTE" | "UNCERTAIN"; reasoning: string; evidenceIds: string[] };
+CanonicalEvidence = { id: CanonicalEvidenceId; status: "VERIFIED" | "INVALID" | "MISSING"; trackedPath: string; lineStart?: number; lineEnd?: number; expectedHash?: string; resolvedHash?: string; origins: EvidenceOrigin[] };
+CanonicalStance = { claimId: CanonicalClaimId; value: "ACCEPT" | "DISPUTE" | "UNCERTAIN"; reasoning: string; evidenceIds: CanonicalEvidenceId[] };
 ClaimBoard = { version: number; claims: CanonicalClaim[]; evidence: CanonicalEvidence[] };
-FinalPosition = { agentId: AgentId; agentRunId: string; roundId: string; stances: Stance[] };
+FinalPosition = { agentId: AgentId; agentRunId: string; roundId: string; stances: CanonicalStance[] };
+ResolvedModelSelection = Readonly<{ provider: AgentId; class: string | null; requestedModelId: string | null; effort: string | null }>;
 Verdict = Readonly<{ claimId: string; classification: "CONSENSUS" | "DISAGREEMENT" | "REJECTED" | "UNRESOLVED"; support: "VERIFIED" | "UNSUPPORTED"; finalStances: readonly [StanceRecord, StanceRecord] | readonly StanceRecord[]; evidence: readonly CanonicalEvidence[]; provenance: readonly ClaimOrigin[]; counts: Readonly<VerdictCounts> }>;
 ```
 
-Provider schemas must expose provider-local claim and evidence references only. Schemas impose bounded string and array sizes, unique local IDs per response, valid local references, and deterministic ordering. Canonical IDs are not accepted from provider output. Host canonicalization translates every claim and stance reference to canonical claim and evidence IDs before persistence. Verdict schemas are deeply immutable after construction.
+The discriminant selects one schema and makes provider drafts distinct from canonical host records. `InitialPhaseResponse` is the only variant with claims. Cross-examination validates exactly the supplied round review set; final validates exactly the entire supplied canonical claim set. Both later variants accept canonical claim IDs and existing canonical evidence IDs only from their input board, while `newEvidenceLocalIds` can resolve only against `newEvidence` in that same response/run. Reject every unknown, missing, duplicate, dangling, cross-run, and wrong-namespace ID before canonicalization. Unknown forward-compatible fields may be tolerated, but reserved fields owned by another phase (especially `claims`) are rejected. Verdict schemas are deeply immutable after construction.
 
 - [ ] **Step 4: Implement safe environment construction**
 
@@ -840,14 +874,16 @@ git commit -m "feat: define agent adapter boundary"
 
 - [ ] **Step 1: Write failing parser and argument tests**
 
-For Codex, assert `codex exec --help` contains complete tokens for `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox`, and `--cd` or `-C`. Run arguments must be equivalent to `exec --ephemeral --ignore-user-config --ignore-rules --json --sandbox read-only -C <root> --output-schema <temporary-schema-path> -`. Parse the completed structured response from bounded JSONL and normalize it through Task 6 provider-local schemas.
+For Codex, assert `codex exec --help` contains complete tokens for `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`, `--output-schema`, `--sandbox`, `--model`, the explicit `--config`/`-c` override used for effort, and `--cd` or `-C`. Provider-default run arguments omit model and effort options. An explicit resolved selection adds `--model`, the opaque CLI model ID, and, when configured, `--config`, `model_reasoning_effort="<effort>"` as direct array elements. Remaining arguments must be equivalent to `exec --ephemeral --ignore-user-config --ignore-rules --json --sandbox read-only -C <root> --output-schema <temporary-schema-path> -`. Parse the completed structured response from bounded JSONL and validate it against the exact requested Task 6 initial, cross-examination, or final schema.
 
-For Claude, assert version/help probing requires compatible, parseable version output and the complete tokens `--bare`, `--tools`, `--disallowedTools`, `--permission-mode`, `--no-session-persistence`, `--print` or `-p`, `--output-format`, and `--json-schema`. Its exact safety argument subsequence is `--bare --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --permission-mode plan --no-session-persistence -p --output-format json --json-schema <compact-inline-json>`. The compact schema, with a UTF-8 limit of `MAX_RESPONSE_SCHEMA_BYTES = 32_768`, is passed as one array element without a shell. Parse the top-level JSON result, validate its structured payload through Task 6 provider-local schemas, and reject `is_error: true`.
+For Claude, assert version/help probing requires compatible, parseable version output and the complete tokens `--bare`, `--tools`, `--disallowedTools`, `--permission-mode`, `--no-session-persistence`, `--print` or `-p`, `--output-format`, `--json-schema`, `--model`, and `--effort`. Its exact safety argument subsequence is `--bare --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --permission-mode plan --no-session-persistence -p --output-format json --json-schema <compact-inline-json>`. Provider default omits model and effort options; an explicit selection adds `--model`, CLI model ID, and optional `--effort`, effort as direct array elements. The compact schema, with a UTF-8 limit of `MAX_RESPONSE_SCHEMA_BYTES = 32_768`, is passed as one array element without a shell. Parse the top-level JSON result, validate its structured payload against the exact requested initial, cross-examination, or final schema, and reject `is_error: true`.
 
 ```ts
 expect(parseClaudeResult('{"is_error":false,"result":"analysis"}')).toBe("analysis");
 expect(parseCodexJsonl(codexFixture)).toEqual(expectedStructuredResponse);
 ```
+
+For each adapter, table-test the exact argument array for provider default, explicit concrete class without effort, and explicit concrete class with effort. Assert metacharacters remain one inert array value. Unknown/disallowed classes are rejected by selection resolution before either argument builder or process runner is called. Table-test all three response schemas through both providers: the transported schema has the requested discriminant and reserved fields, and a valid response from another phase is rejected.
 
 - [ ] **Step 2: Run adapter tests to verify they fail**
 
@@ -857,19 +893,19 @@ Expected: FAIL because adapter modules do not exist.
 
 - [ ] **Step 3: Implement the Codex adapter**
 
-`probe()` runs the separately installed `<command> --version` and `<command> exec --help` with a 10-second timeout and 256 KiB output limit through `runProcess`. It fails closed on an unparseable or unsupported version or unless every required Codex token is present, including one working-directory spelling. Record the supported minimum version/range in a reviewed adapter compatibility constant and fixture. `run()` probes first, captures Git integrity, writes the response schema only after enforcing `MAX_RESPONSE_SCHEMA_BYTES = 32_768` to a private temporary directory, invokes the exact hardened argument set through `runProcess`, parses bounded JSONL, captures integrity again, and fails with `PROJECT_INTEGRITY_CHANGED` if the snapshots differ. Remove only that Codex temporary schema and directory in `finally` without following links.
+`probe()` runs the separately installed `<command> --version` and `<command> exec --help` with a 10-second timeout and 256 KiB output limit through `runProcess`. It fails closed on an unparseable or unsupported version or unless every required safety, model, effort-override, and structured-output token is present, including one working-directory spelling. Record the supported minimum version/range and argument spellings in a reviewed adapter compatibility constant and fixture. `run()` receives a pre-resolved selection, probes first, captures Git integrity, writes the selected phase response schema only after enforcing `MAX_RESPONSE_SCHEMA_BYTES = 32_768` to a private temporary directory, invokes the exact hardened argument set through `runProcess`, parses bounded JSONL, captures integrity again, and fails with `PROJECT_INTEGRITY_CHANGED` if the snapshots differ. Remove only that Codex temporary schema and directory in `finally` without following links.
 
 Pass only `OPENAI_API_KEY`, `CODEX_HOME`, and the runtime-critical environment names from Task 6. Map process completion, failure, cancellation, timeout, output limit, and malformed structured output to normalized agent outcomes.
 
 - [ ] **Step 4: Implement the Claude adapter**
 
-`probe()` runs the separately installed `<command> --version` and `<command> --help` through `runProcess`, rejects unparseable or unsupported versions against a reviewed compatibility constant, and fails closed unless every mandatory safety, ambient-isolation, session, and structured-output flag is present. `run()` uses the same integrity snapshots as Codex but creates no schema file: it compacts the JSON schema, enforces the 32,768-byte UTF-8 bound, and supplies it as exactly one `--json-schema` argument. The argument builder emits `--bare`, `--tools`, `Read,Glob,Grep`, `--disallowedTools`, `mcp__*`, `--permission-mode`, `plan`, `--no-session-persistence`, `-p`, `--output-format`, `json`, `--json-schema`, and the compact schema value; the prompt travels through bounded stdin and no shell interprets either value. Pass only `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, and runtime-critical environment names.
+`probe()` runs the separately installed `<command> --version` and `<command> --help` through `runProcess`, rejects unparseable or unsupported versions against a reviewed compatibility constant, and fails closed unless every mandatory safety, ambient-isolation, session, model, effort, and structured-output flag is present. `run()` receives a pre-resolved selection and uses the same integrity snapshots as Codex but creates no schema file: it compacts the selected phase JSON schema, enforces the 32,768-byte UTF-8 bound, and supplies it as exactly one `--json-schema` argument. The argument builder emits `--bare`, `--tools`, `Read,Glob,Grep`, `--disallowedTools`, `mcp__*`, `--permission-mode`, `plan`, `--no-session-persistence`, `-p`, `--output-format`, `json`, `--json-schema`, and the compact schema value, plus direct model/effort elements only for an explicit selection; the prompt travels through bounded stdin and no shell interprets any value. Pass only `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, and runtime-critical environment names.
 
 `--bare` disables discovered MCP servers and customizations; `--disallowedTools "mcp__*"` is required defense in depth against ambient MCP tools. Only Read, Glob, and Grep are available. Do not pass or expose Bash, Edit, Write, Notebook, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--allowedTools`, or edit-capable permission modes.
 
 - [ ] **Step 5: Add fake-process integration coverage**
 
-Inject executable names, separate argument builders, and the process runner. Exercise both complete adapter lifecycles with fake Node CLIs while asserting fail-closed version/capability checks for every required flag, prompt stdin, structured schema validation, provider-local claim and evidence IDs, bounded diagnostics, output-limit termination, unchanged Git state, and complete descendant-tree cancellation. Codex tests assert the restrictive schema file path occupies the `--output-schema` value and that the one Codex temporary file is removed in `finally`. Claude tests assert the compact schema occupies exactly one inline `--json-schema` array element, no schema file is created or removed, the exact Read/Glob/Grep allowlist is present, `--bare` and explicit `mcp__*` denial are both present, and Bash/Edit/Write/Notebook plus ambient MCP tools cannot be invoked. The same integration suite must be runnable on Windows, macOS, and Linux CI.
+Inject executable names, separate argument builders, and the process runner. Exercise both complete adapter lifecycles with fake Node CLIs while asserting fail-closed version/capability checks for every required flag, prompt stdin, all three structured phase schemas, bounded diagnostics, output-limit termination, actionable unsupported/unauthorized model errors without fallback, unchanged Git state, and complete descendant-tree cancellation. Codex tests assert the selected restrictive phase schema file path occupies the `--output-schema` value and that the one Codex temporary file is removed in `finally`. Claude tests assert the selected compact phase schema occupies exactly one inline `--json-schema` array element, no schema file is created or removed, the exact Read/Glob/Grep allowlist is present, `--bare` and explicit `mcp__*` denial are both present, and Bash/Edit/Write/Notebook plus ambient MCP tools cannot be invoked. Both tests assert resolved model/effort values are direct inert arguments and provider default omits them. The same integration suite must be runnable on Windows, macOS, and Linux CI.
 
 - [ ] **Step 6: Run adapter tests and commit**
 
@@ -896,12 +932,12 @@ git commit -m "feat: add hardened Codex and Claude CLI adapters"
 - Create: `tests/unit/orchestrator/ask-service.test.ts`
 
 **Interfaces:**
-- Consumes: `AgentRegistry`, `ProjectService`, `ProjectRepository`, and `SessionRepository`.
+- Consumes: `AgentRegistry`, Task 2 concrete model selections, `ProjectService`, `ProjectRepository`, and `SessionRepository`.
 - Produces: `AskService.ask()`, `ActiveRuns.cancel()`, `ConcurrencyGate.run()`, normalized ask reports, and persisted lifecycle transitions.
 
 - [ ] **Step 1: Write failing orchestration tests**
 
-Use in-memory fake adapters and a temporary SQLite database. Test one agent, both agents in parallel, one-of-two failure, both failure, cancellation, unavailable adapter, configured concurrency, duplicate interaction delivery, and persistence ordering.
+Use in-memory fake adapters and a temporary SQLite database. Test one agent, both agents in parallel, one-of-two failure, both failure, cancellation, unavailable adapter, configured concurrency, duplicate interaction delivery, and persistence ordering. Add selection tests for omitted options resolving to each provider's configured `defaultModel` or provider default when unset, separate `codexModel` and `claudeModel` concrete classes for `both`, an unknown/disallowed class failing before any fake adapter call, provider-default argument omission, and persisted nullable class/requested model/observed model/effort on each run.
 
 ```ts
 const report = await service.ask({
@@ -954,6 +990,8 @@ export interface AskInput {
   interactionId: string;
   projectId?: string;
   selection: AgentSelection;
+  codexModel?: string;
+  claudeModel?: string;
   question: string;
 }
 
@@ -969,7 +1007,7 @@ export class AskService {
 }
 ```
 
-Before creating work, query the repository by `interactionId`. Return its persisted terminal report when already completed, or raise `INTERACTION_IN_PROGRESS` while it is active. Resolve the explicit project or scoped active project, persist the user message before starting agents, run each selected adapter through `ConcurrencyGate`, combine `both` with `Promise.allSettled`, preserve deterministic Codex-then-Claude output ordering, persist every run and agent response, and unregister the controller in `finally`. One success plus one failure is `partial`; two failures are `failed`; an authorized abort is `cancelled`.
+Before creating work, query the repository by `interactionId`. Return its persisted terminal report when already completed, or raise `INTERACTION_IN_PROGRESS` while it is active. Resolve the explicit project or scoped active project and each selected provider's separate optional concrete class against configuration before persisting or starting a process. Persist the user message, run each selected adapter through `ConcurrencyGate` with its immutable `ResolvedModelSelection`, combine `both` with `Promise.allSettled`, preserve deterministic Codex-then-Claude output ordering, persist nullable class/requested model ID/observed model ID/effort and every response, and unregister the controller in `finally`. One success plus one failure is `partial`; two failures are `failed`; an authorized abort is `cancelled`. Provider default omits model arguments; unknown classes and unsupported/unauthorized models never fall back.
 
 - [ ] **Step 6: Run orchestration tests and commit**
 
@@ -1004,7 +1042,7 @@ git commit -m "feat: orchestrate dual-agent questions"
 - Create: `tests/unit/debate/debate-service.test.ts`
 
 **Interfaces:**
-- Consumes: `AgentRegistry`, Task 2 `DebateConfig`, Task 6 structured schemas, `ProjectService`, `SessionRepository`, `DeliberationRepository`, `ActiveRuns`, and `ConcurrencyGate`.
+- Consumes: `AgentRegistry`, Task 2 `DebateConfig` and concrete model selections, Task 6 structured schemas, `ProjectService`, `SessionRepository`, `DeliberationRepository`, `ActiveRuns`, and `ConcurrencyGate`.
 - Produces: `DebateService.debate()`, persisted compact claim boards, bounded structured rounds, independent final positions, and deterministic `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, or `UNRESOLVED` verdict reports.
 
 ```ts
@@ -1012,6 +1050,8 @@ export interface DebateInput {
   scope: { guildId: string; channelId: string; userId: string };
   interactionId: string;
   projectId?: string;
+  codexModel?: string;
+  claudeModel?: string;
   topic: string;
 }
 
@@ -1036,6 +1076,10 @@ Use schema-valid fake adapters and an in-memory database. Cover all of these cas
 - exact duplicate normalized claims merge many-to-one while preserving both origins; provider-local ID collisions within one run fail validation;
 - the same provider-local evidence ID from different agents/runs cannot collide; a duplicate within one run fails validation; mechanically identical references merge to one canonical evidence ID while preserving every origin;
 - every provider-local evidence reference in claims and stances translates to a canonical `evidence-NNNN` ID, including mechanically `INVALID` or `MISSING` records retained for audit;
+- only `InitialPhaseResponse` may contain claims; cross-examination/final `claims` fields are rejected, including attempted counterclaims after initial board creation;
+- cross-examination covers its supplied canonical review set exactly once and accepts claims originating from the other provider; final covers every canonical board claim exactly once, while earlier stances never repair a missing final stance;
+- cross-examination and final reject unknown/missing/duplicate/wrong-namespace canonical claim/evidence IDs, dangling or cross-run new-evidence local IDs, and duplicate local evidence declarations; valid same-response new evidence is canonicalized and translated into the next board;
+- omitted or explicit concrete provider classes resolve once before the debate starts, persist nullable class/requested model ID/observed model ID/effort on every run, and remain identical for that provider across initial, every cross-examination round, and final; unknown classes start no processes and provider errors never fall back;
 - the default and every boundary value from `DebateConfig` reach `DebateService`, are recorded on the session, and enforce rounds, board claim count, and serialized byte count;
 - every provider call receives only the topic, rules, response schema, and a compact claim board bounded by the effective configuration, never the unconstrained transcript or a hidden resumed session;
 - every persisted provider call can be reconstructed exactly from its request/response and input/output board hashes;
@@ -1056,13 +1100,13 @@ Expected: FAIL because deliberation modules do not exist.
 
 - [ ] **Step 3: Implement claim-board construction and bounded context**
 
-Normalize independently produced provider-local claims and evidence through Task 6 schemas. Reject duplicate provider-local claim or evidence IDs within one run, while treating the same local ID from different runs as unrelated. Sort normalized claims by content and deterministic provider/run/local-reference tie-breakers, then assign canonical IDs monotonically as `claim-0001`, `claim-0002`, and so on. Merge exact normalized claim duplicates while persisting every origin in `claim_origins`; providers never supply canonical IDs.
+Require `InitialPhaseResponse` from both initial calls. Normalize its independently produced provider-local claim and evidence drafts through Task 6 schemas. Reject duplicate provider-local claim or evidence IDs within one run, dangling claim evidence references, any canonical provider-supplied ID, and any non-initial discriminant. Sort normalized claims by content and deterministic provider/run/local-reference tie-breakers, then assign canonical IDs monotonically as `claim-0001`, `claim-0002`, and so on. Merge exact normalized claim duplicates while persisting every origin in `claim_origins`; providers never supply canonical IDs. Initial processing is the only v0.1 path that creates claims.
 
 After claim canonicalization, normalize evidence mechanically and sort by the deterministic tuple `(normalized tracked path, line start, line end, expected content hash, agent ID, run ID, provider-local evidence ID)`. Assign `evidence-0001`, `evidence-0002`, and so on. Merge references whose normalized path/range/hash tuple is identical, preserve every source in `evidence_origins`, and translate all claim and stance references from their run-scoped local IDs to canonical evidence IDs. Retain `INVALID` and `MISSING` references as canonical auditable records rather than dropping them. Persist claim/evidence joins, stance/evidence joins, and a content-hashed immutable board snapshot before cross-examination. `buildDeliberationContext(config: DebateConfig, ...)` must include only material or currently unresolved entries required by the round and fail with `DEBATE_CONTEXT_LIMIT` rather than ambiguously truncate when either `maxBoardClaims` or `maxBoardBytes` would be exceeded.
 
 - [ ] **Step 4: Implement cross-examination and bounded rounds**
 
-Send the same explicit compact board to fresh stateless Codex and Claude calls. Require one `ACCEPT`, `DISPUTE`, or `UNCERTAIN` stance per reviewed material claim. Run another round only for material claims still disputed or uncertain and only below `config.maxRounds`. Persist each round's phase and input/output board versions plus each agent run's phase, purpose, exact bounded request/response, board links, evidence, and stance before scheduling another call.
+Send the same explicit compact board and canonical review set to fresh stateless Codex and Claude calls under `CrossExaminationPhaseResponse`. Require exactly one `ACCEPT`, `DISPUTE`, or `UNCERTAIN` stance per review-set canonical claim, including other-provider origins; reject missing, extra, or duplicate stances. Validate `existingEvidenceIds` only against the input board and `newEvidenceLocalIds` only against unique `newEvidence` declarations in that same response/run. Reject wrong namespaces, dangling/cross-run IDs, and every `claims` field. Mechanically validate/canonicalize new evidence, translate its stance links, and persist the next versioned board; disagreement creates rationale/evidence, not later claims. Run another round only for material claims still disputed or uncertain and only below `config.maxRounds`. Persist each round's phase and input/output board versions plus each agent run's frozen concrete model selection, phase, purpose, exact bounded discriminated request/response, board links, evidence, and stance before scheduling another call.
 
 - [ ] **Step 5: Resolve evidence mechanically**
 
@@ -1070,13 +1114,13 @@ Resolve evidence only in host code. Canonicalize and require a Git-tracked path 
 
 - [ ] **Step 6: Implement final positions and deterministic verdict derivation**
 
-Collect independent final positions in fresh stateless calls, requiring exactly one final stance per canonical material claim. Ignore all earlier stances when classifying. Apply the exhaustive pure function: `ACCEPT` + `ACCEPT` = `CONSENSUS`; `ACCEPT` + `DISPUTE` in either order = `DISAGREEMENT`; `DISPUTE` + `DISPUTE` = `REJECTED`; every pair containing `UNCERTAIN`, every missing/failed/cancelled agent, and anything other than exactly two valid final stances = `UNRESOLVED`. Mark a consensus with no `VERIFIED` evidence as `UNSUPPORTED`.
+Collect independent `FinalPhaseResponse` positions in fresh stateless calls, requiring exactly one final stance for every canonical claim in the final input board. Apply the same existing-canonical versus response-local-new evidence validation and translation rules as cross-examination; reject every `claims` field and every missing, extra, duplicate, dangling, cross-run, or wrong-namespace reference. Ignore all earlier stances when classifying; they never substitute for a missing final stance. Apply the exhaustive pure function: `ACCEPT` + `ACCEPT` = `CONSENSUS`; `ACCEPT` + `DISPUTE` in either order = `DISAGREEMENT`; `DISPUTE` + `DISPUTE` = `REJECTED`; every pair containing `UNCERTAIN`, every missing/failed/cancelled agent, and anything other than exactly two valid final stances = `UNRESOLVED`. Mark a consensus with no `VERIFIED` evidence as `UNSUPPORTED`.
 
 Create a deeply immutable structured verdict with canonical claim ID, classification, final stance/run/round records, resolved evidence, complete origins, support marker, and deterministic counts. Sort by canonical claim ID and persist before presentation. A model may change summary prose only; deep-compare the entire structured verdict collection before and after polishing and reject any change to verdicts, classifications, evidence/provenance, IDs, or counts.
 
 - [ ] **Step 7: Implement degraded operation, cancellation, and persistence**
 
-Before both initial responses exist, one-agent failure returns the successful independent analysis with `DEBATE_NOT_ESTABLISHED`. Later failure yields `partial`, retaining the claim board, completed rounds, stances, evidence, final positions, and `UNRESOLVED` verdicts for affected claims. `DebateService.debate(input, config: DebateConfig)` records the effective immutable config, registers with `ActiveRuns`, passes one abort signal through every queued/provider operation, persists terminal state exactly once, and unregisters in `finally`.
+Before both initial responses exist, one-agent failure returns the successful independent analysis with `DEBATE_NOT_ESTABLISHED`. Later failure yields `partial`, retaining the claim board, completed rounds, stances, evidence, final positions, and `UNRESOLVED` verdicts for affected claims. `DebateService.debate(input, config: DebateConfig)` resolves `codexModel` and `claudeModel` concrete classes before process creation, freezes those selections for the session, records the effective immutable config, registers with `ActiveRuns`, passes one abort signal through every queued/provider operation, persists terminal state exactly once, and unregisters in `finally`.
 
 - [ ] **Step 8: Run deliberation tests and commit**
 
@@ -1104,8 +1148,8 @@ git commit -m "feat: add structured dual-agent deliberation"
 - Create: `tests/unit/transport/discord/command-handler.test.ts`
 
 **Interfaces:**
-- Consumes: `AskService`, `DebateService`, `AgentRegistry`, project repositories, session and deliberation repositories, and `ActiveRuns`.
-- Produces: Discord commands `/projects`, `/switch`, `/ask`, `/debate`, `/status`, `/stop` and a testable interaction port.
+- Consumes: `AskService`, `DebateService`, `AgentRegistry`, configured concrete model selections, project repositories, session and deliberation repositories, and `ActiveRuns`.
+- Produces: Discord commands `/projects`, `/models`, `/switch`, `/ask`, `/debate`, `/status`, `/stop` and a testable interaction port.
 
 - [ ] **Step 1: Write failing authorization and handler tests**
 
@@ -1125,7 +1169,7 @@ export interface InteractionPort {
 }
 ```
 
-Test unauthorized guild, unauthorized user, missing active project, `/switch`, each `/ask` selection, `/debate topic:<text> project:<id?>` with active and explicit projects, `/status`, cancellation ownership, one-agent debate failure, deterministic debate rendering, unsupported consensus labeling, and a result longer than Discord's message limit.
+Test unauthorized guild, unauthorized user, missing active project, `/models`, `/switch`, each `/ask` selection, `/debate topic:<text> project:<id?>` with active and explicit projects, separate Codex/Claude concrete model choices, omitted model choices with configured/default-provider behavior, unknown classes rejected before orchestration, `/status`, cancellation ownership, one-agent debate failure, deterministic debate rendering, unsupported consensus labeling, persisted model selection display, and a result longer than Discord's message limit.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1138,17 +1182,18 @@ Expected: FAIL because Discord modules do not exist.
 Build `SlashCommandBuilder` definitions with exact options:
 
 - `/projects`
+- `/models`
 - `/switch project` required string
-- `/ask agent` required choice (`codex`, `claude`, `both`) and `question` required string
-- `/debate topic` required string and `project` optional registered-project string
+- `/ask agent` required choice (`codex`, `claude`, `both`), `question` required string, `codex_model` optional configured Codex concrete-class choice, and `claude_model` optional configured Claude concrete-class choice
+- `/debate topic` required string, `project` optional registered-project string, `codex_model` optional configured Codex concrete-class choice, and `claude_model` optional configured Claude concrete-class choice
 - `/status`
 - `/stop run` optional string defaulting to the requester's current run
 
-`authorize(scope, config)` must reject DMs, guilds outside `guildIds`, and users outside `allowedUserIds` before any database access.
+Register the at-most-25 configured classes as provider-specific Discord choices, omitting a provider's model option entirely when its allowlist is empty. Omission is not displayed as a synthetic class: it uses `defaultModel` or provider default. Never expose raw CLI IDs as input values, and revalidate submitted choices to reject stale/forged interactions before orchestration. `authorize(scope, config)` must reject DMs, guilds outside `guildIds`, and users outside `allowedUserIds` before any database access.
 
 - [ ] **Step 4: Implement formatting and the pure command handler**
 
-Format ask results with project, session ID, status, separate agent headings, safe diagnostics, and no raw environment values. Format debate results in separate `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, and `UNRESOLVED` sections, followed by mechanically resolved evidence and provenance. Label consensus without verified evidence as `UNSUPPORTED`; do not merge or relabel verdicts in model-written prose. Use messages no longer than 1,900 characters; return a concise message plus an in-memory UTF-8 attachment for longer reports.
+Format `/models` with each provider's configured concrete classes, default class or provider-default-by-omission, and an entitlement-not-verified warning. Format ask results with project, session ID, status, separate agent headings, persisted concrete class/requested model ID/observed model ID/effort, safe diagnostics, and no raw environment values. Format debate results with the one frozen selection per provider and separate `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, and `UNRESOLVED` sections, followed by mechanically resolved evidence and provenance. Label consensus without verified evidence as `UNSUPPORTED`; do not merge or relabel verdicts in model-written prose. Use messages no longer than 1,900 characters; return a concise message plus an in-memory UTF-8 attachment for longer reports.
 
 The handler must defer `/ask` and `/debate` immediately, pass `interactionId` into the appropriate service, then edit the reply on success or known failure. A repeated interaction returns the persisted terminal report and never starts another provider call. Other commands reply directly. Map stable domain errors to actionable English messages without stack traces.
 
@@ -1191,7 +1236,7 @@ git commit -m "feat: expose agent questions through Discord"
 
 - [ ] **Step 1: Write failing CLI and vertical-slice tests**
 
-Test exact command parsing for `setup`, `doctor`, and `start`, plus invalid commands. The vertical-slice test must create a temporary Git project and database, use fake Codex and Claude CLI processes, invoke the Discord-neutral `/ask both` and `/debate` handlers, and assert:
+Test exact command parsing for `setup`, `doctor`, and `start`, plus invalid commands. The vertical-slice test must create a temporary Git project and database, configure concrete Codex/Claude classes, use fake Codex and Claude CLI processes, invoke the Discord-neutral `/models`, `/ask both`, and `/debate` handlers, and assert:
 
 ```ts
 expect(reply.status).toBe("completed");
@@ -1201,7 +1246,7 @@ expect(sessionRepository.recent(1)).toHaveLength(1);
 expect(await captureGitIntegrity(projectRoot)).toEqual(before);
 ```
 
-For `/debate`, assert that both agents receive explicit claim-board context, every call is reconstructible, canonical IDs and duplicate origins are persisted, final-stances-only verdicts render in separate classification sections with mechanical evidence status, the run obeys all effective `DebateConfig` limits, and Git integrity remains unchanged. The all-success fake-provider runs must never be formatted as partial or failed.
+For `/debate`, assert that initial, cross-examination, and final calls receive their exact discriminated schemas; both agents receive explicit claim-board context; same-response new evidence is translated; forbidden later claims and ID namespace violations fail; every call is reconstructible; orphan/cross-board evidence FKs reject invalid rows; canonical IDs and duplicate origins are persisted; selected concrete model class/requested ID/observed ID/effort remain fixed per provider across phases; final-stances-only verdicts render in separate classification sections with mechanical evidence status; the run obeys all effective `DebateConfig` limits; and Git integrity remains unchanged. Test provider-default omission and unknown class/no-process behavior separately. The all-success fake-provider runs must never be formatted as partial or failed.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1216,31 +1261,31 @@ export type CliCommand = { name: "setup" } | { name: "doctor" } | { name: "start
 export function parseCommand(argv: readonly string[]): CliCommand;
 ```
 
-Use `node:readline/promises` in `setup` to collect Discord application ID, guild IDs, authorized user IDs, and one or more project ID/name/root triples. Validate each project with Task 3 before saving. Create `.env` only after explicit confirmation, write only `AI_WORKSPACE_DISCORD_TOKEN=<entered value>`, set restrictive permissions where supported, and never echo the token.
+Use `node:readline/promises` in `setup` to collect Discord application ID, guild IDs, authorized user IDs, one or more project ID/name/root triples, and optional concrete model class/CLI ID/effort mappings plus `defaultModel` for each provider. Default to empty model lists and unset defaults. Show Codex `sol`/`terra`/`luna` and Claude `opus`/`fable`/`sonnet`/`haiku` mappings only as optional examples, never entitlement claims. Validate each project with Task 3 and all selections with Task 2 before saving. Create `.env` only after explicit confirmation, write only `AI_WORKSPACE_DISCORD_TOKEN=<entered value>`, set restrictive permissions where supported, and never echo the token.
 
 - [ ] **Step 4: Implement doctor and startup composition**
 
-`doctor` prints OS, Node, Git, config path, database writability, each project validation result, and each agent's capability diagnostics. It redacts home-relative details from shareable output unless `--verbose` is introduced in a separate design.
+`doctor` prints OS, Node, Git, config path, database writability, each project validation result, and each agent's capability diagnostics. It validates configured model/effort flag support from version/help output without making a paid inference call. It explicitly reports that account entitlement is runtime-only unless the provider exposes a stable safe listing contract; configured concrete selections are not entitlement guarantees. It redacts home-relative details from shareable output unless `--verbose` is introduced in a separate design.
 
 `start` loads `.env`, config, paths, database, migrations, projects, repositories, adapters, registry, ask and debate services, command handler, and Discord runtime in that order. On `SIGINT` or `SIGTERM`, stop accepting interactions, call `ActiveRuns.cancelAll()`, wait up to 10 seconds, destroy the Discord client, close SQLite, and exit.
 
 - [ ] **Step 5: Write operator and contributor documentation**
 
-`README.md` must link `docs/decisions/README.md` and contain prerequisites for all three operating systems, clone/install commands, Discord application creation, `.env` setup, `pnpm setup`, `pnpm doctor`, `pnpm start`, `/ask` and `/debate topic:<text> project:<id?>` examples, local data locations, separate Codex and Claude CLI installation/authentication links, source-non-modification guarantees, the complete-host-read-isolation limitation, structured deliberation and deterministic-verdict guarantees, mechanical evidence limitations, and troubleshooting. `SECURITY.md` documents the allowlist, Git-tracked-only symlink rule, provider capability gate, ambient-config isolation flags, integrity backstop, host read-isolation limitation, secret handling, and vulnerability reporting. `CONTRIBUTING.md` documents pnpm, TDD, quality commands, ADR usage, English-only public artifacts, and the no-secret rule.
+`README.md` must link `docs/decisions/README.md` and contain prerequisites for all three operating systems, clone/install commands, Discord application creation, `.env` setup, `pnpm setup`, `pnpm doctor`, `pnpm start`, `/models`, `/ask`, and `/debate topic:<text> project:<id?> codex_model:<class?> claude_model:<class?>` examples, local data locations, separate Codex and Claude CLI installation/authentication links, source-non-modification guarantees, the complete-host-read-isolation limitation, structured deliberation and deterministic-verdict guarantees, mechanical evidence limitations, model entitlement limitations, and troubleshooting. Document configurable concrete model classes with Codex `sol`/`terra`/`luna` and Claude `opus`/`fable`/`sonnet`/`haiku` as non-entitlement examples, provider default by omission, fixed per-provider debate selections, and no fallback. `SECURITY.md` documents the allowlist, Git-tracked-only symlink rule, provider capability gate, ambient-config isolation flags, integrity backstop, host read-isolation limitation, secret handling, and vulnerability reporting. `CONTRIBUTING.md` documents pnpm, TDD, quality commands, ADR usage, English-only public artifacts, and the no-secret rule.
 
 - [ ] **Step 6: Run the complete verification suite**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 
-Expected: every command exits 0; the vertical-slice test proves `/ask` and `/debate`, both hardened CLI adapters, reconstructible claim-board persistence, exhaustive deterministic verdict formatting, process-tree cancellation, bounded context, and unchanged Git state without real credentials.
+Expected: every command exits 0; the vertical-slice test proves `/models`, `/ask`, and `/debate`, separate concrete provider selections, provider-default omission, fixed debate models, exact phase schemas, both hardened CLI adapters, reconstructible claim-board/model/evidence persistence, exhaustive deterministic verdict formatting, process-tree cancellation, bounded context, and unchanged Git state without real credentials.
 
 - [ ] **Step 7: Perform opt-in local smoke checks**
 
 Run: `pnpm doctor`
 
-Expected on the current machine: Git and Node pass; each CLI reports supported hardened capabilities or an actionable installation, authentication, or missing-flag diagnostic. Do not weaken tests or adapter policy to make an unavailable or unsafe local CLI appear healthy.
+Expected on the current machine: Git and Node pass; each CLI reports supported hardened safety/model/effort capabilities or an actionable installation, authentication, or missing-flag diagnostic. Doctor makes no paid model call and labels entitlement as unverified when no safe listing contract exists. Do not weaken tests or adapter policy to make an unavailable or unsafe local CLI appear healthy.
 
-After the operator installs and authenticates both CLIs and configures a private Discord bot, run `pnpm start`; issue `/ask agent:both question:Summarize this project without changing files`; issue `/debate topic:Identify the highest-risk module and justify the choice`; verify all verdict classes and evidence statuses render separately; then issue a long-running request followed by `/stop`. Confirm `git status --short` is unchanged.
+After the operator installs and authenticates both CLIs and configures a private Discord bot, run `pnpm start`; inspect `/models`; issue `/ask agent:both question:Summarize this project without changing files codex_model:sol claude_model:sonnet` when those concrete classes are configured; issue `/debate topic:Identify the highest-risk module and justify the choice codex_model:terra claude_model:opus` when configured; verify the selections remain fixed across phases and all verdict classes/evidence statuses render separately; then issue a long-running request followed by `/stop`. Confirm `git status --short` is unchanged.
 
 - [ ] **Step 8: Commit**
 
@@ -1260,16 +1305,19 @@ Before declaring the dual-agent vertical slice complete, verify all of the follo
 - CI passes on Windows, macOS, and Linux.
 - `pnpm setup` creates only local configuration and an ignored `.env`.
 - `pnpm doctor` reports real provider capabilities and fails closed for unsupported source-non-modification modes.
+- Model configuration accepts at most 25 unique concrete classes per provider, uses provider default when `defaultModel` and command options are absent, and rejects unknown classes before process creation.
+- `/models` lists configured provider-specific concrete classes/defaults; `/ask` and `/debate` accept separate optional `codex_model` and `claude_model` choices with no shared/raw model input.
 - `/ask` works for Codex, Claude, and both.
 - `/debate topic:<text> project:<id?>` runs independent provider-local initial claims/evidence, deterministic canonical claim and evidence IDs with complete many-to-one origins and local-to-canonical translation, shared persisted claim-board snapshots, cross-examination, configured bounded unresolved-claim rounds, independent final positions, and exhaustive final-stances-only verdict derivation.
 - `DebateConfig` defaults and bounds are enforced, persisted, and threaded through every deliberation call.
 - Discord renders `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, `UNRESOLVED`, and mechanical evidence status separately, including `UNSUPPORTED` consensus.
 - Provider calls use explicit bounded context and do not depend on hidden session history.
 - One agent failure produces a partial response rather than discarding the successful result.
-- SQLite reconstructs every provider request/response and contains hashed board snapshots, canonical claims and evidence, separate many-to-one claim/evidence origins, claim/stance evidence joins, mechanically resolved invalid/missing/verified references, phase-linked rounds and runs, audit stances, final positions, immutable verdicts, and bounded diagnostics.
+- SQLite reconstructs every provider request/response and contains nullable concrete model class/requested ID/observed ID/effort for every run, hashed board snapshots, canonical claims and evidence, separate many-to-one claim/evidence origins, claim/stance evidence joins, mechanically resolved invalid/missing/verified references, phase-linked rounds and runs, audit stances, final positions, immutable verdicts, and bounded diagnostics.
 - `/stop` terminates the complete agent process tree and records cancellation.
 - Both CLI version/capability probes fail closed if any required safety, ambient-isolation, session, or structured-output flag is absent; Claude uses `--bare`, the exact Read/Glob/Grep allowlist, explicit `mcp__*` denial, plan permission mode, no session persistence, print mode, and JSON output.
 - Codex alone receives a bounded restrictive schema file that is removed in `finally`; Claude receives the bounded compact schema JSON inline as one argument, and neither adapter invokes a shell.
+- Model IDs and efforts are direct inert argument-array elements; one selection per provider remains fixed through every debate phase, and unsupported/unauthorized models never silently fall back.
 - The selected Git project has identical pre-run and post-run integrity snapshots.
 - Only Git-tracked symlinks are rejected for escaping the project root; dependency-manager symlink layouts remain valid.
 - No Discord token, personal path, guild ID, user ID, or project-specific name is tracked by Git.

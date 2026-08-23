@@ -23,6 +23,10 @@ Use a structured deliberation protocol with:
 5. independent final positions; and
 6. deterministic verdict derivation from exactly the two agents' final stances.
 
+Use three non-interchangeable provider response schemas. `InitialPhaseResponse` alone contains provider-local claim drafts and evidence drafts. `CrossExaminationPhaseResponse` and `FinalPhaseResponse` contain stances over canonical claim IDs plus separately named existing canonical evidence IDs and response-local new-evidence IDs. Host code rejects wrong-phase fields, namespace mixing, missing/extra/duplicate claim coverage, and dangling or cross-run references before canonicalizing new evidence.
+
+Only the initial phase may create claims in v0.1. Later disagreement is represented by `DISPUTE` or `UNCERTAIN` rationale and evidence against existing canonical claims. This deliberately bounds board growth and identity semantics; revisit the restriction if evaluation shows agents need material later-phase counterclaims that cannot be expressed against the initial board.
+
 Earlier stances are audit history only. `ACCEPT` plus `ACCEPT` is `CONSENSUS`; `ACCEPT` plus `DISPUTE` in either order is `DISAGREEMENT`; `DISPUTE` plus `DISPUTE` is `REJECTED`; every pair containing `UNCERTAIN`, any missing/failed/cancelled agent, or anything other than exactly two valid final stances is `UNRESOLVED`.
 
 Provider evidence IDs are run-local references only. After claim canonicalization, host code deterministically orders normalized evidence tuples, assigns monotonic `evidence-NNNN` IDs, merges mechanically identical path/range/hash references, preserves every source in `evidence_origins`, and translates all claim and stance references to canonical evidence IDs. Same-named local IDs from different providers cannot collide. Invalid and missing references remain auditable canonical records.
@@ -54,4 +58,4 @@ Each provider call is stateless by default and receives an explicit compact clai
 
 ## Revisit when
 
-Revisit if measured deliberation quality is worse than independent answers, schema overhead prevents useful work within provider limits, or a provider-neutral session mechanism becomes reproducible and fully auditable.
+Revisit if measured deliberation quality is worse than independent answers, later-phase claim creation is necessary to express material counterclaims, schema overhead prevents useful work within provider limits, or a provider-neutral session mechanism becomes reproducible and fully auditable.

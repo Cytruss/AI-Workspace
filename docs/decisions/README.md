@@ -11,6 +11,7 @@ This directory records material architecture choices that affect implementation,
 - [ADR-0005: Define the OBSERVE security boundary](0005-observe-security-boundary.md)
 - [ADR-0006: Use structured deliberation](0006-structured-deliberation.md)
 - [ADR-0007: Use hardened local agent CLIs](0007-hardened-local-agent-clis.md)
+- [ADR-0008: Use allowlisted provider model selections](0008-allowlisted-provider-model-selections.md)
 
 ## Adding a record
 
