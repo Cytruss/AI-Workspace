@@ -10,7 +10,10 @@ Baseline: no package.json exists, so there is no dependency setup or test suite 
 | Work item               | Status | Evidence                                                                         |
 | ----------------------- | ------ | -------------------------------------------------------------------------------- |
 | Task 1: foundation      | PASS   | Review accepted commits `88d3a00` and `57abf0c`; all quality gates pass.         |
+| Task 2: configuration   | PENDING RE-REVIEW | Fix round 1 commits `168b9f0` and `b37f38a`; 2 review findings addressed, 0 knowingly open. |
 | Architecture amendments | PASS   | Fifth re-review accepted all remediation; no new Critical or Important findings. |
+
+Task 2: fix round 1/5 — reviewer found post-rename chmod could report failure after commit and chmod/cleanup errors were not correctly classified or preserved. Commit `b37f38a` makes destination rename the last fallible successful-path mutation, tolerates only documented unsupported/permission-denied POSIX chmod codes, rethrows unexpected chmod failures, and preserves primary write/chmod/rename errors if exact-temp cleanup fails. RED: 9 expected failures. GREEN: 27/27 regression tests; focused 32/32; full 33/33 with build, lint, typecheck, format check, and `git diff --check` clean. Status pending scoped re-review, not PASS.
 
 ## Pre-flight dependency scan
 
