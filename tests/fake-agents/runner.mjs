@@ -42,7 +42,8 @@ switch (mode) {
     process.exitCode = 17;
     break;
   case "oversize":
-    process.stdout.write("x".repeat(8_192));
+    process.stdout.write("o".repeat(96));
+    process.stderr.write("e".repeat(96));
     break;
   case "hang":
     setInterval(() => undefined, 1_000);

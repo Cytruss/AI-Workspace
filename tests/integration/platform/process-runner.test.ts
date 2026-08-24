@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runProcess } from "../../../src/platform/process-runner.js";
+import { terminateProcessTree } from "../../../src/platform/terminate-process-tree.js";
 
 const fakeAgent = fileURLToPath(
   new URL("../../fake-agents/runner.mjs", import.meta.url),
@@ -36,6 +38,24 @@ async function exists(path: string): Promise<boolean> {
 }
 
 describe("process runner", () => {
+  it("treats an already-exited process tree as terminated", async () => {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      shell: false,
+      stdio: "ignore",
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", () => {
+        resolve();
+      });
+    });
+    if (child.pid === undefined) {
+      throw new Error("Short-lived child did not expose a PID");
+    }
+
+    await expect(terminateProcessTree(child.pid, 1)).resolves.toBeUndefined();
+  });
+
   it("reports a typed error when the executable cannot start", async () => {
     await expect(
       runProcess(
@@ -100,6 +120,8 @@ describe("process runner", () => {
     expect(
       Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr),
     ).toBeLessThanOrEqual(128);
+    expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(result.stderr)).toBeGreaterThan(0);
   });
 
   it("terminates descendant processes with the process tree", async () => {
