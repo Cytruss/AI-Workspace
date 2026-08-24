@@ -113,6 +113,19 @@ describe("Codex adapter arguments and JSONL parser", () => {
     ).toThrow();
   });
 
+  test("does not replace a completed agent message with a later uncompleted message", () => {
+    const event = (selected: string) =>
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: JSON.stringify({ selected }) },
+      });
+    expect(
+      parseCodexJsonl(
+        [event("A"), '{"type":"turn.completed"}', event("B")].join("\n"),
+      ),
+    ).toEqual({ selected: "A" });
+  });
+
   test("rejects an unconfigured structural selection before probing", async () => {
     let calls = 0;
     const adapter = new CodexAdapter(

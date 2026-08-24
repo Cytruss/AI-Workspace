@@ -59,7 +59,6 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
 
 export function parseCodexJsonl(output: string): unknown {
   let response: unknown;
-  let completed = false;
   let agentMessageCompleted = false;
   for (const line of output.split(/\r?\n/)) {
     if (line.trim() === "") continue;
@@ -67,7 +66,7 @@ export function parseCodexJsonl(output: string): unknown {
     if (typeof event !== "object" || event === null) continue;
     const type = (event as { type?: unknown }).type;
     if (type === "turn.completed") {
-      completed = agentMessageCompleted;
+      if (agentMessageCompleted && response !== undefined) return response;
       continue;
     }
     if (type !== "item.completed") continue;
@@ -80,12 +79,9 @@ export function parseCodexJsonl(output: string): unknown {
       agentMessageCompleted = true;
     }
   }
-  if (response === undefined || !completed) {
-    throw new Error(
-      "Codex JSONL did not include a completed structured response",
-    );
-  }
-  return response;
+  throw new Error(
+    "Codex JSONL did not include a completed structured response",
+  );
 }
 
 export const CODEX_MINIMUM_HARDENED_VERSION = "0.76.0";

@@ -212,18 +212,30 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
       cliModelId: "claude-opus-effort",
       requestedEffort: "high",
     };
-    await new CodexAdapter(config, {
+    const codex = new CodexAdapter(config, {
       runProcess: fixtureRunner(codexCli, codexCalls),
       captureGitIntegrity: () => Promise.resolve(snapshot),
-    }).run(
+    });
+    await codex.run(
+      { ...request("model"), modelSelection: withoutEffort },
+      new AbortController().signal,
+    );
+    const codexWithoutEffort = codexCalls.at(-1)?.args;
+    await codex.run(
       { ...request("model"), modelSelection: withEffort },
       new AbortController().signal,
     );
-    await new ClaudeAdapter(config, {
+    const claude = new ClaudeAdapter(config, {
       runProcess: fixtureRunner(claudeCli, claudeCalls),
       captureGitIntegrity: () => Promise.resolve(snapshot),
-    }).run(
+    });
+    await claude.run(
       { ...request("model"), modelSelection: withoutEffort },
+      new AbortController().signal,
+    );
+    const claudeWithoutEffort = claudeCalls.at(-1)?.args;
+    await claude.run(
+      { ...request("model"), modelSelection: withEffort },
       new AbortController().signal,
     );
     expect(codexCalls.at(-1)?.args).toEqual(
@@ -234,10 +246,22 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
         'model_reasoning_effort="high"',
       ]),
     );
-    expect(claudeCalls.at(-1)?.args).toEqual(
+    expect(codexWithoutEffort).toEqual(
       expect.arrayContaining(["--model", "claude-opus"]),
     );
-    expect(claudeCalls.at(-1)?.args).not.toContain("--effort");
+    expect(codexWithoutEffort).not.toContain("--config");
+    expect(claudeWithoutEffort).toEqual(
+      expect.arrayContaining(["--model", "claude-opus"]),
+    );
+    expect(claudeWithoutEffort).not.toContain("--effort");
+    expect(claudeCalls.at(-1)?.args).toEqual(
+      expect.arrayContaining([
+        "--model",
+        "claude-opus-effort",
+        "--effort",
+        "high",
+      ]),
+    );
   });
 
   test("Claude retains observation and integrity rejection diagnostics after real execution", async () => {
@@ -281,5 +305,23 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
     );
     expect(changedResult.status).toBe("failed");
     expect(changedResult.diagnostics).toContain("PROJECT_INTEGRITY_CHANGED");
+  });
+
+  test("invalid structural selection reaches neither real provider fixture nor probe", async () => {
+    const calls: ProcessRequest[] = [];
+    const adapter = new CodexAdapter(config, {
+      runProcess: fixtureRunner(codexCli, calls),
+      captureGitIntegrity: () => Promise.resolve(snapshot),
+    });
+    await expect(
+      adapter.run(
+        {
+          ...request("invalid"),
+          modelSelection: { class: "unknown", cliModelId: "opaque" },
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_MODEL_UNSUPPORTED" });
+    expect(calls).toHaveLength(0);
   });
 });
