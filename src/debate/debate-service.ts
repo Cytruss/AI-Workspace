@@ -199,6 +199,15 @@ export class DebateService {
       );
   }
 
+  private persistInputSnapshot(
+    sessionId: string,
+    sourceVersion: number,
+    board: ClaimBoard,
+  ) {
+    const snapshot = { ...board, version: sourceVersion * 1_000 + 100 };
+    return { board: snapshot, record: this.persistBoard(sessionId, snapshot) };
+  }
+
   private request(
     phase: "initial" | "cross-examination" | "final",
     topic: string,
@@ -528,17 +537,22 @@ export class DebateService {
           reviewClaimIds: unresolved,
           responseSchema: "cross-examination",
         });
+        const inputSnapshot = this.persistInputSnapshot(
+          session.id,
+          board.version,
+          context.board,
+        );
         const round = this.dependencies.deliberation.createRound({
           sessionId: session.id,
           roundNumber: roundNumber + 1,
           phase: "cross_examination",
           status: "running",
-          inputBoardId: boardRecord.id,
+          inputBoardId: inputSnapshot.record.id,
         });
         const request = this.request(
           "cross-examination",
           input.topic,
-          context.board,
+          inputSnapshot.board,
           context.reviewClaimIds,
         );
         const schema = createCrossExaminationPhaseResponseSchema(
@@ -557,7 +571,7 @@ export class DebateService {
             roundId: round.id,
             phase: storedPhase("cross-examination"),
             purpose: "bounded cross-examination",
-            inputBoardId: boardRecord.id,
+            inputBoardId: inputSnapshot.record.id,
             request,
             diagnostics: {},
           });
@@ -681,13 +695,6 @@ export class DebateService {
         }
       }
 
-      const finalRound = this.dependencies.deliberation.createRound({
-        sessionId: session.id,
-        roundNumber: rounds.length + 1,
-        phase: "final",
-        status: "running",
-        inputBoardId: boardRecord.id,
-      });
       this.assertBoardBounds(config, board);
       const finalContext = buildDeliberationContext(config, {
         phase: "final",
@@ -697,10 +704,22 @@ export class DebateService {
         reviewClaimIds: board.claims.map((claim) => claim.id),
         responseSchema: "final",
       });
+      const finalInputSnapshot = this.persistInputSnapshot(
+        session.id,
+        board.version,
+        finalContext.board,
+      );
+      const finalRound = this.dependencies.deliberation.createRound({
+        sessionId: session.id,
+        roundNumber: rounds.length + 1,
+        phase: "final",
+        status: "running",
+        inputBoardId: finalInputSnapshot.record.id,
+      });
       const request = this.request(
         "final",
         input.topic,
-        finalContext.board,
+        finalInputSnapshot.board,
         finalContext.reviewClaimIds,
       );
       const finalSchema = createFinalPhaseResponseSchema(
@@ -719,7 +738,7 @@ export class DebateService {
           roundId: finalRound.id,
           phase: "final",
           purpose: "independent final position",
-          inputBoardId: boardRecord.id,
+          inputBoardId: finalInputSnapshot.record.id,
           request,
           diagnostics: {},
         });
