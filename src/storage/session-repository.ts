@@ -163,6 +163,8 @@ function providerEnvelopeJson(
   expectedPhase: string,
   label: "Agent request" | "Agent response",
 ): string {
+  const providerPhase =
+    expectedPhase === "cross_examination" ? "cross-examination" : expectedPhase;
   if (
     value === null ||
     typeof value !== "object" ||
@@ -176,7 +178,7 @@ function providerEnvelopeJson(
     typeof phase !== "string" ||
     phase.length < 1 ||
     Buffer.byteLength(phase, "utf8") > 64 ||
-    phase !== expectedPhase
+    (phase !== expectedPhase && phase !== providerPhase)
   )
     throw new Error(`${label} phase must exactly match run phase`);
   return boundedJson(value, label);
