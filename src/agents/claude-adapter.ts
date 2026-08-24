@@ -5,7 +5,11 @@ import {
   captureGitIntegrity,
 } from "../permissions/git-integrity.js";
 import { type ProcessResult, runProcess } from "../platform/process-runner.js";
-import { validateModelCapabilities } from "./agent-registry.js";
+import {
+  AgentBoundaryError,
+  normalizeModelExecution,
+  validateModelCapabilities,
+} from "./agent-registry.js";
 import { requireHelpFlags } from "./help-capabilities.js";
 import { buildSafeEnvironment } from "./safe-environment.js";
 import {
@@ -95,11 +99,12 @@ function atLeast(value: string): boolean {
   if (match === null) return false;
   const have = match.slice(1).map(Number);
   const need = CLAUDE_MINIMUM_HARDENED_VERSION.split(".").map(Number);
-  return (
-    have.some(
-      (part, index) => part !== need[index] && part > (need[index] ?? 0),
-    ) || have.every((part, index) => part === need[index])
-  );
+  for (let index = 0; index < need.length; index += 1) {
+    const actual = have[index] ?? 0;
+    const required = need[index] ?? 0;
+    if (actual !== required) return actual > required;
+  }
+  return true;
 }
 function statusOf(result: ProcessResult): AgentResult["status"] {
   if (result.termination === "cancelled") return "cancelled";
@@ -151,6 +156,8 @@ export class ClaudeAdapter implements AgentAdapter {
       if (
         version.exitCode !== 0 ||
         help.exitCode !== 0 ||
+        version.termination !== "exit" ||
+        help.termination !== "exit" ||
         !atLeast(version.stdout)
       )
         throw new Error(
@@ -204,6 +211,7 @@ export class ClaudeAdapter implements AgentAdapter {
     const capabilities = await this.probe();
     if (!capabilities.available)
       return this.failed(request, 0, capabilities.diagnostics);
+    this.validateSelection(request.modelSelection);
     validateModelCapabilities(capabilities, request.modelSelection);
     if (request.responseSchema === undefined)
       return this.failed(request, 0, [
@@ -233,6 +241,20 @@ export class ClaudeAdapter implements AgentAdapter {
       const diagnostics = [processResult.stdout, processResult.stderr].filter(
         (value) => value !== "",
       );
+      try {
+        assertGitIntegrityUnchanged(
+          before,
+          await this.integrity(request.projectRoot),
+        );
+      } catch {
+        return this.failed(
+          request,
+          processResult.durationMs,
+          [...diagnostics, "PROJECT_INTEGRITY_CHANGED"],
+          "failed",
+          processResult,
+        );
+      }
       const status = statusOf(processResult);
       if (status !== "completed")
         return this.failed(
@@ -245,7 +267,27 @@ export class ClaudeAdapter implements AgentAdapter {
       const response = parseClaudeResult(processResult.stdout);
       const structured = request.responseSchema.parse(JSON.parse(response));
       const ids = observed(processResult.stdout);
-      const execution = this.execution(request.modelSelection, ids);
+      let execution: ReturnType<typeof normalizeModelExecution>;
+      try {
+        execution = normalizeModelExecution(
+          request.modelSelection,
+          ids,
+          request.modelSelection === undefined ? "unverified" : "verified",
+        );
+      } catch (error) {
+        return this.failed(
+          request,
+          processResult.durationMs,
+          [
+            ...diagnostics,
+            error instanceof Error
+              ? error.message
+              : "MODEL_OBSERVATION_INVALID",
+          ],
+          "failed",
+          processResult,
+        );
+      }
       if (request.modelSelection !== undefined) {
         if (ids.length === 0)
           return this.failed(
@@ -276,10 +318,6 @@ export class ClaudeAdapter implements AgentAdapter {
             execution,
           );
       }
-      assertGitIntegrityUnchanged(
-        before,
-        await this.integrity(request.projectRoot),
-      );
       return {
         agentId: this.id,
         status: "completed",
@@ -319,13 +357,33 @@ export class ClaudeAdapter implements AgentAdapter {
           : ("verified" as const),
     };
   }
+  private validateSelection(
+    selection: ResolvedModelSelection | undefined,
+  ): void {
+    if (selection === undefined) return;
+    const configured = this.config.models.selections.find(
+      (entry) => entry.class === selection.class,
+    );
+    if (
+      configured === undefined ||
+      configured.cliModelId !== selection.cliModelId ||
+      configured.requestedEffort !== selection.requestedEffort
+    ) {
+      throw new AgentBoundaryError(
+        "AGENT_MODEL_UNSUPPORTED",
+        "Resolved model selection does not match configured model policy",
+      );
+    }
+  }
   private failed(
     request: AgentRequest,
     durationMs: number,
     diagnostics: string[],
     status: AgentResult["status"] = "failed",
     processResult?: ProcessResult,
-    execution = this.execution(request.modelSelection),
+    execution: ReturnType<typeof normalizeModelExecution> = this.execution(
+      request.modelSelection,
+    ),
   ): AgentResult {
     return {
       agentId: this.id,

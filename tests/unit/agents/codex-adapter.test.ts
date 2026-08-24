@@ -92,6 +92,46 @@ describe("Codex adapter arguments and JSONL parser", () => {
     });
   });
 
+  test.each([
+    [
+      "missing turn completion",
+      '{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}',
+    ],
+    [
+      "non-agent item",
+      '{"type":"item.completed","item":{"type":"tool_call","text":"{}"}}\n{"type":"turn.completed"}',
+    ],
+  ])("rejects JSONL with %s", (_name, output) => {
+    expect(() => parseCodexJsonl(output)).toThrow();
+  });
+
+  test("rejects a patch-only version below the compatibility floor", async () => {
+    const outputs = [
+      "0.75.999",
+      "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --sandbox --model --config -C",
+    ];
+    const adapter = new CodexAdapter(
+      {
+        command: "codex",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: () =>
+          Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout: outputs.shift() ?? "",
+            stderr: "",
+            durationMs: 1,
+            termination: "exit",
+          }),
+      },
+    );
+    await expect(adapter.probe()).resolves.toMatchObject({ available: false });
+  });
+
   test("fails closed when the required hardening flags are absent", async () => {
     const adapter = new CodexAdapter(
       {

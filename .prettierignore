@@ -3,5 +3,5 @@ coverage/
 dist/
 docs/superpowers/
 node_modules/
-tests/fixtures/agent-output/
+tests/fixtures/agent-output/codex-success.json
 pnpm-lock.yaml

@@ -8,7 +8,10 @@ import {
   captureGitIntegrity,
 } from "../permissions/git-integrity.js";
 import { type ProcessResult, runProcess } from "../platform/process-runner.js";
-import { validateModelCapabilities } from "./agent-registry.js";
+import {
+  AgentBoundaryError,
+  validateModelCapabilities,
+} from "./agent-registry.js";
 import { requireHelpFlags } from "./help-capabilities.js";
 import { buildSafeEnvironment } from "./safe-environment.js";
 import {
@@ -56,16 +59,24 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
 
 export function parseCodexJsonl(output: string): unknown {
   let response: unknown;
+  let completed = false;
   for (const line of output.split(/\r?\n/)) {
     if (line.trim() === "") continue;
     const event: unknown = JSON.parse(line);
     if (typeof event !== "object" || event === null) continue;
+    const type = (event as { type?: unknown }).type;
+    if (type === "turn.completed") {
+      completed = true;
+      continue;
+    }
+    if (type !== "item.completed") continue;
     const item = (event as { item?: unknown }).item;
     if (typeof item !== "object" || item === null) continue;
+    if ((item as { type?: unknown }).type !== "agent_message") continue;
     const text = (item as { text?: unknown }).text;
     if (typeof text === "string") response = JSON.parse(text);
   }
-  if (response === undefined) {
+  if (response === undefined || !completed) {
     throw new Error(
       "Codex JSONL did not include a completed structured response",
     );
@@ -97,11 +108,12 @@ function versionAtLeast(value: string, minimum: string): boolean {
   if (match === null) return false;
   const numbers = match.slice(1).map(Number);
   const floor = minimum.split(".").map(Number);
-  return (
-    numbers.some(
-      (part, index) => part !== floor[index] && part > (floor[index] ?? 0),
-    ) || numbers.every((part, index) => part === floor[index])
-  );
+  for (let index = 0; index < floor.length; index += 1) {
+    const actual = numbers[index] ?? 0;
+    const required = floor[index] ?? 0;
+    if (actual !== required) return actual > required;
+  }
+  return true;
 }
 
 function resultStatus(result: ProcessResult): AgentResult["status"] {
@@ -144,6 +156,8 @@ export class CodexAdapter implements AgentAdapter {
       if (
         version.exitCode !== 0 ||
         help.exitCode !== 0 ||
+        version.termination !== "exit" ||
+        help.termination !== "exit" ||
         !versionAtLeast(version.stdout, CODEX_MINIMUM_HARDENED_VERSION)
       )
         throw new Error(
@@ -191,6 +205,7 @@ export class CodexAdapter implements AgentAdapter {
     const capabilities = await this.probe();
     if (!capabilities.available)
       return this.failed(request, 0, capabilities.diagnostics);
+    this.validateSelection(request.modelSelection);
     validateModelCapabilities(capabilities, request.modelSelection);
     if (request.responseSchema === undefined)
       return this.failed(request, 0, [
@@ -228,6 +243,20 @@ export class CodexAdapter implements AgentAdapter {
       const diagnostics = [processResult.stdout, processResult.stderr].filter(
         (value) => value !== "",
       );
+      try {
+        assertGitIntegrityUnchanged(
+          before,
+          await this.integrity(request.projectRoot),
+        );
+      } catch {
+        return this.failed(
+          request,
+          processResult.durationMs,
+          [...diagnostics, "PROJECT_INTEGRITY_CHANGED"],
+          "failed",
+          processResult,
+        );
+      }
       const status = resultStatus(processResult);
       if (status !== "completed")
         return this.failed(
@@ -239,10 +268,6 @@ export class CodexAdapter implements AgentAdapter {
         );
       const structured = request.responseSchema.parse(
         parseCodexJsonl(processResult.stdout),
-      );
-      assertGitIntegrityUnchanged(
-        before,
-        await this.integrity(request.projectRoot),
       );
       return {
         agentId: this.id,
@@ -279,6 +304,25 @@ export class CodexAdapter implements AgentAdapter {
       observedModelIds: [] as string[],
       verification: "unverified" as const,
     };
+  }
+
+  private validateSelection(
+    selection: ResolvedModelSelection | undefined,
+  ): void {
+    if (selection === undefined) return;
+    const configured = this.config.models.selections.find(
+      (entry) => entry.class === selection.class,
+    );
+    if (
+      configured === undefined ||
+      configured.cliModelId !== selection.cliModelId ||
+      configured.requestedEffort !== selection.requestedEffort
+    ) {
+      throw new AgentBoundaryError(
+        "AGENT_MODEL_UNSUPPORTED",
+        "Resolved model selection does not match configured model policy",
+      );
+    }
   }
 
   private failed(

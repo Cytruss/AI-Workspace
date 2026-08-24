@@ -39,7 +39,7 @@ describe("hardened adapter lifecycle", () => {
             ? "0.76.0"
             : request.args.includes("--help")
               ? codexHelp
-              : '{"item":{"text":"{\\"phase\\":\\"initial\\",\\"claims\\":[],\\"evidence\\":[]}"}}\n';
+              : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"initial\\",\\"claims\\":[],\\"evidence\\":[]}"}}\n{"type":"turn.completed"}\n';
         return Promise.resolve({
           exitCode: 0,
           signal: null,

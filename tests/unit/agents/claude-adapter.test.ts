@@ -90,4 +90,31 @@ describe("Claude adapter arguments and JSON parser", () => {
       diagnostics: [expect.stringContaining("Missing required")],
     });
   });
+
+  test("rejects a patch-only version below the compatibility floor", async () => {
+    const outputs = [
+      "2.0.999",
+      "--bare --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage",
+    ];
+    const adapter = new ClaudeAdapter(
+      {
+        command: "claude",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: () =>
+          Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout: outputs.shift() ?? "",
+            stderr: "",
+            durationMs: 1,
+            termination: "exit",
+          }),
+      },
+    );
+    await expect(adapter.probe()).resolves.toMatchObject({ available: false });
+  });
 });
