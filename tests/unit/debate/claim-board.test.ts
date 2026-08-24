@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { createInitialClaimBoard } from "../../../src/debate/claim-board.js";
+import {
+  appendPhaseEvidence,
+  createInitialClaimBoard,
+} from "../../../src/debate/claim-board.js";
 
 describe("createInitialClaimBoard", () => {
   test("merges normalized duplicate claims while retaining both origins", async () => {
@@ -48,4 +51,31 @@ describe("createInitialClaimBoard", () => {
       "codex",
     ]);
   });
+});
+
+test("adds later-phase evidence with the next canonical ID and translates stance links", async () => {
+  const board = await createInitialClaimBoard(process.cwd(), [
+    {
+      agentId: "codex",
+      runId: "initial-c",
+      response: {
+        phase: "initial",
+        evidence: [],
+        claims: [
+          { localId: "c", text: "Claim", material: true, evidenceLocalIds: [] },
+        ],
+      } as never,
+    },
+  ]);
+  const next = await appendPhaseEvidence(process.cwd(), board, [
+    {
+      agentId: "claude",
+      runId: "cross-a",
+      draft: { localId: "new-evidence", trackedPath: "missing-file" } as never,
+    },
+  ]);
+  expect(next.board.evidence.map((item) => item.id)).toEqual(["evidence-0001"]);
+  expect(
+    next.localToCanonical.get("claude\u0000cross-a\u0000new-evidence"),
+  ).toBe("evidence-0001");
 });

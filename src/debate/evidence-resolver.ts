@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import type { ProviderEvidenceDraft } from "../agents/structured-response.js";
 import type { EvidenceStatus } from "./types.js";
 
@@ -58,7 +58,9 @@ export async function resolveEvidence(
     "trackedPath" | "lineStart" | "lineEnd" | "contentHash"
   >,
 ): Promise<ResolvedEvidence> {
-  const trackedPath = draft.trackedPath.replaceAll("\\", "/");
+  const trackedPath = normalize(draft.trackedPath)
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "");
   if (
     trackedPath.length === 0 ||
     isAbsolute(trackedPath) ||

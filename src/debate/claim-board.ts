@@ -137,3 +137,51 @@ export async function createInitialClaimBoard(
     evidence: [...canonicalEvidence.evidence],
   };
 }
+
+/** Adds only response-local evidence; later phases cannot add claims. */
+export async function appendPhaseEvidence(
+  root: string,
+  board: ClaimBoard,
+  drafts: readonly EvidenceDraftWithOrigin[],
+): Promise<{
+  board: ClaimBoard;
+  localToCanonical: ReadonlyMap<string, string>;
+}> {
+  const generated = await canonicalizeEvidence(root, drafts);
+  const evidence = [...board.evidence];
+  const localToCanonical = new Map<string, string>();
+  const key = (item: {
+    trackedPath: string;
+    lineStart?: number | undefined;
+    lineEnd?: number | undefined;
+    expectedHash?: string | undefined;
+  }) =>
+    [
+      item.trackedPath,
+      item.lineStart ?? "",
+      item.lineEnd ?? "",
+      item.expectedHash ?? "",
+    ].join("\u0000");
+  for (const item of generated.evidence) {
+    const existing = evidence.find((candidate) => key(candidate) === key(item));
+    const id =
+      existing?.id ??
+      (`evidence-${String(evidence.length + 1).padStart(4, "0")}` as typeof item.id);
+    if (existing === undefined) evidence.push({ ...item, id });
+    else existing.origins.push(...item.origins);
+    for (const origin of item.origins) {
+      localToCanonical.set(
+        localEvidenceKey(
+          origin.agentId,
+          origin.agentRunId,
+          origin.providerLocalId,
+        ),
+        id,
+      );
+    }
+  }
+  return {
+    board: { ...board, version: board.version + 1, evidence },
+    localToCanonical,
+  };
+}

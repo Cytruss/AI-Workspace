@@ -26,9 +26,10 @@ import type {
 } from "../projects/project-service.js";
 import type { DeliberationRepository } from "../storage/deliberation-repository.js";
 import type { SessionRepository } from "../storage/session-repository.js";
+import { canonicalJson } from "../storage/session-repository.js";
 import { ActiveRuns } from "../orchestrator/active-runs.js";
 import { ConcurrencyGate } from "../orchestrator/concurrency-gate.js";
-import { createInitialClaimBoard } from "./claim-board.js";
+import { appendPhaseEvidence, createInitialClaimBoard } from "./claim-board.js";
 import { buildDeliberationContext } from "./context-builder.js";
 import type { DebateInput, DebateReport, DebateRoundSummary } from "./types.js";
 import { deriveVerdicts } from "./verdicts.js";
@@ -185,6 +186,17 @@ export class DebateService {
         });
     }
     return record;
+  }
+
+  private assertBoardBounds(config: DebateConfig, board: ClaimBoard): void {
+    if (
+      board.claims.length > config.maxBoardClaims ||
+      Buffer.byteLength(canonicalJson(board), "utf8") > config.maxBoardBytes
+    )
+      throw new DebateServiceError(
+        "DEBATE_CONTEXT_LIMIT",
+        "Claim board exceeds the effective configured bounds",
+      );
   }
 
   private request(
@@ -485,6 +497,7 @@ export class DebateService {
           response: InitialPhaseResponseSchema.parse(item.result.structured),
         })),
       );
+      this.assertBoardBounds(config, board);
       let boardRecord = this.persistBoard(session.id, board);
       this.dependencies.deliberation.finishRound(
         initialRound.id,
@@ -501,6 +514,7 @@ export class DebateService {
       let unresolved = board.claims
         .filter((claim) => claim.material)
         .map((claim) => claim.id);
+      let degraded: "partial" | "cancelled" | undefined;
       for (
         let roundNumber = 1;
         unresolved.length > 0 && roundNumber <= config.maxRounds;
@@ -575,7 +589,19 @@ export class DebateService {
             item.result.status === "completed" &&
             schema.safeParse(item.result.structured).success,
         );
-        const output = { ...board, version: board.version + 1 };
+        const appended = await appendPhaseEvidence(
+          project.root,
+          board,
+          valid.flatMap((item) =>
+            schema.parse(item.result.structured).newEvidence.map((draft) => ({
+              agentId: item.agent.adapter.id,
+              runId: item.id,
+              draft,
+            })),
+          ),
+        );
+        const output = appended.board;
+        this.assertBoardBounds(config, output);
         const outputRecord = this.persistBoard(session.id, output);
         const roundStatus = controller.signal.aborted
           ? "cancelled"
@@ -607,7 +633,21 @@ export class DebateService {
               stance: stance.value,
               reasoning: stance.reasoning,
             });
-            for (const evidenceId of stance.existingEvidenceIds)
+            const evidenceIds = [
+              ...stance.existingEvidenceIds,
+              ...stance.newEvidenceLocalIds.map((localId) => {
+                const id = appended.localToCanonical.get(
+                  `${item.agent.adapter.id}\u0000${item.id}\u0000${localId}`,
+                );
+                if (id === undefined)
+                  throw new DebateServiceError(
+                    "DANGLING_EVIDENCE",
+                    "New evidence was not canonicalized",
+                  );
+                return id;
+              }),
+            ];
+            for (const evidenceId of evidenceIds)
               this.dependencies.deliberation.linkStanceEvidence({
                 stanceId: record.id,
                 boardId: outputRecord.id,
@@ -617,7 +657,7 @@ export class DebateService {
               claimId: stance.claimId,
               value: stance.value,
               reasoning: stance.reasoning,
-              evidenceIds: stance.existingEvidenceIds,
+              evidenceIds: evidenceIds as StanceRecord["evidenceIds"],
               agentId: item.agent.adapter.id,
               agentRunId: item.id,
               roundId: round.id,
@@ -635,7 +675,10 @@ export class DebateService {
               ),
           )
           .map((claim) => claim.id);
-        if (roundStatus !== "completed") break;
+        if (roundStatus !== "completed") {
+          degraded = roundStatus === "cancelled" ? "cancelled" : "partial";
+          break;
+        }
       }
 
       const finalRound = this.dependencies.deliberation.createRound({
@@ -645,6 +688,7 @@ export class DebateService {
         status: "running",
         inputBoardId: boardRecord.id,
       });
+      this.assertBoardBounds(config, board);
       const request = this.request(
         "final",
         input.topic,
@@ -694,13 +738,27 @@ export class DebateService {
             : undefined,
         );
       }
-      const output = { ...board, version: board.version + 1 };
-      const outputRecord = this.persistBoard(session.id, output);
       const completedFinal = finalResults.filter(
         (item) =>
           item.result.status === "completed" &&
           finalSchema.safeParse(item.result.structured).success,
       );
+      const appended = await appendPhaseEvidence(
+        project.root,
+        board,
+        completedFinal.flatMap((item) =>
+          finalSchema
+            .parse(item.result.structured)
+            .newEvidence.map((draft) => ({
+              agentId: item.agent.adapter.id,
+              runId: item.id,
+              draft,
+            })),
+        ),
+      );
+      const output = appended.board;
+      this.assertBoardBounds(config, output);
+      const outputRecord = this.persistBoard(session.id, output);
       const finalStatus = controller.signal.aborted
         ? "cancelled"
         : completedFinal.length === 2
@@ -720,17 +778,49 @@ export class DebateService {
         status: finalStatus,
       });
       const finalStances: StanceRecord[] = [];
-      for (const item of completedFinal)
-        for (const stance of finalSchema.parse(item.result.structured).stances)
+      for (const item of completedFinal) {
+        for (const stance of finalSchema.parse(item.result.structured)
+          .stances) {
+          const evidenceIds = [
+            ...stance.existingEvidenceIds,
+            ...stance.newEvidenceLocalIds.map((localId) => {
+              const id = appended.localToCanonical.get(
+                `${item.agent.adapter.id}\u0000${item.id}\u0000${localId}`,
+              );
+              if (id === undefined)
+                throw new DebateServiceError(
+                  "DANGLING_EVIDENCE",
+                  "New evidence was not canonicalized",
+                );
+              return id;
+            }),
+          ];
           finalStances.push({
             claimId: stance.claimId,
             value: stance.value,
             reasoning: stance.reasoning,
-            evidenceIds: stance.existingEvidenceIds,
+            evidenceIds: evidenceIds as StanceRecord["evidenceIds"],
             agentId: item.agent.adapter.id,
             agentRunId: item.id,
             roundId: finalRound.id,
           });
+          const record = this.dependencies.deliberation.addStance({
+            boardId: outputRecord.id,
+            canonicalClaimId: stance.claimId,
+            roundId: finalRound.id,
+            agentRunId: item.id,
+            agentId: item.agent.adapter.id,
+            stance: stance.value,
+            reasoning: stance.reasoning,
+          });
+          for (const evidenceId of evidenceIds)
+            this.dependencies.deliberation.linkStanceEvidence({
+              stanceId: record.id,
+              boardId: outputRecord.id,
+              canonicalEvidenceId: evidenceId,
+            });
+        }
+      }
       for (const item of completedFinal) {
         const response = finalSchema.parse(item.result.structured);
         this.dependencies.deliberation.addFinalPosition({
@@ -768,11 +858,12 @@ export class DebateService {
         });
       }
       const status =
-        finalStatus === "completed"
+        degraded ??
+        (finalStatus === "completed"
           ? "completed"
           : finalStatus === "cancelled"
             ? "cancelled"
-            : "partial";
+            : "partial");
       if (status === "completed")
         this.dependencies.sessions.markCompleted(session.id);
       else if (status === "cancelled")
