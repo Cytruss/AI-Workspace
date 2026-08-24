@@ -200,11 +200,12 @@ export class DebateService {
   }
 
   private persistInputSnapshot(
+    config: DebateConfig,
     sessionId: string,
-    sourceVersion: number,
     board: ClaimBoard,
   ) {
-    const snapshot = { ...board, version: sourceVersion * 1_000 + 100 };
+    const snapshot = { ...board, version: board.version + 1 };
+    this.assertBoardBounds(config, snapshot);
     return { board: snapshot, record: this.persistBoard(sessionId, snapshot) };
   }
 
@@ -538,8 +539,8 @@ export class DebateService {
           responseSchema: "cross-examination",
         });
         const inputSnapshot = this.persistInputSnapshot(
+          config,
           session.id,
-          board.version,
           context.board,
         );
         const round = this.dependencies.deliberation.createRound({
@@ -614,7 +615,10 @@ export class DebateService {
             })),
           ),
         );
-        const output = appended.board;
+        const output = {
+          ...appended.board,
+          version: inputSnapshot.board.version + 1,
+        };
         this.assertBoardBounds(config, output);
         const outputRecord = this.persistBoard(session.id, output);
         const roundStatus = controller.signal.aborted
@@ -705,8 +709,8 @@ export class DebateService {
         responseSchema: "final",
       });
       const finalInputSnapshot = this.persistInputSnapshot(
+        config,
         session.id,
-        board.version,
         finalContext.board,
       );
       const finalRound = this.dependencies.deliberation.createRound({
@@ -783,7 +787,10 @@ export class DebateService {
             })),
         ),
       );
-      const output = appended.board;
+      const output = {
+        ...appended.board,
+        version: finalInputSnapshot.board.version + 1,
+      };
       this.assertBoardBounds(config, output);
       const outputRecord = this.persistBoard(session.id, output);
       const finalStatus = controller.signal.aborted
