@@ -1,5 +1,7 @@
 /* global process, setInterval */
 
+import { readFile } from "node:fs/promises";
+
 const args = process.argv.slice(2);
 const stdin = await new Promise((resolve, reject) => {
   let text = "";
@@ -18,11 +20,20 @@ else if (args.includes("--help"))
 else if (stdin === "HANG") setInterval(() => undefined, 1_000);
 else if (stdin === "OVERSIZE") process.stdout.write("x".repeat(8_192));
 else {
-  const response = JSON.stringify({
-    phase: "initial",
-    claims: [],
-    evidence: [],
-  });
+  const schema = await readFile(
+    args[args.indexOf("--output-schema") + 1],
+    "utf8",
+  );
+  const phase = schema.includes('"cross-examination"')
+    ? "cross-examination"
+    : schema.includes('"final"')
+      ? "final"
+      : "initial";
+  const response = JSON.stringify(
+    phase === "initial"
+      ? { phase, claims: [], evidence: [] }
+      : { phase, stances: [], newEvidence: [] },
+  );
   process.stdout.write(
     `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: response } })}\n${JSON.stringify({ type: "turn.completed" })}\n`,
   );

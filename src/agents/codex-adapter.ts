@@ -60,13 +60,14 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
 export function parseCodexJsonl(output: string): unknown {
   let response: unknown;
   let completed = false;
+  let agentMessageCompleted = false;
   for (const line of output.split(/\r?\n/)) {
     if (line.trim() === "") continue;
     const event: unknown = JSON.parse(line);
     if (typeof event !== "object" || event === null) continue;
     const type = (event as { type?: unknown }).type;
     if (type === "turn.completed") {
-      completed = true;
+      completed = agentMessageCompleted;
       continue;
     }
     if (type !== "item.completed") continue;
@@ -74,7 +75,10 @@ export function parseCodexJsonl(output: string): unknown {
     if (typeof item !== "object" || item === null) continue;
     if ((item as { type?: unknown }).type !== "agent_message") continue;
     const text = (item as { text?: unknown }).text;
-    if (typeof text === "string") response = JSON.parse(text);
+    if (typeof text === "string") {
+      response = JSON.parse(text);
+      agentMessageCompleted = true;
+    }
   }
   if (response === undefined || !completed) {
     throw new Error(
@@ -202,10 +206,10 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async run(request: AgentRequest, signal: AbortSignal): Promise<AgentResult> {
+    this.validateSelection(request.modelSelection);
     const capabilities = await this.probe();
     if (!capabilities.available)
       return this.failed(request, 0, capabilities.diagnostics);
-    this.validateSelection(request.modelSelection);
     validateModelCapabilities(capabilities, request.modelSelection);
     if (request.responseSchema === undefined)
       return this.failed(request, 0, [

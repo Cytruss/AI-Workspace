@@ -105,6 +105,54 @@ describe("Codex adapter arguments and JSONL parser", () => {
     expect(() => parseCodexJsonl(output)).toThrow();
   });
 
+  test("rejects turn completion that precedes the agent message", () => {
+    expect(() =>
+      parseCodexJsonl(
+        '{"type":"turn.completed"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}',
+      ),
+    ).toThrow();
+  });
+
+  test("rejects an unconfigured structural selection before probing", async () => {
+    let calls = 0;
+    const adapter = new CodexAdapter(
+      {
+        command: "codex",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: () => {
+          calls += 1;
+          return Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout: "",
+            stderr: "",
+            durationMs: 1,
+            termination: "exit",
+          });
+        },
+      },
+    );
+    await expect(
+      adapter.run(
+        {
+          runId: "r",
+          projectRoot: process.cwd(),
+          mode: "observe",
+          prompt: "x",
+          timeoutMs: 100,
+          maxOutputBytes: 1_024,
+          modelSelection: { class: "unknown", cliModelId: "opaque" },
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_MODEL_UNSUPPORTED" });
+    expect(calls).toBe(0);
+  });
+
   test("rejects a patch-only version below the compatibility floor", async () => {
     const outputs = [
       "0.75.999",

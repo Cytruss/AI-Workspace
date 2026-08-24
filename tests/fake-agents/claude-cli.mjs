@@ -17,13 +17,30 @@ else if (args.includes("--help"))
   );
 else if (stdin === "HANG") setInterval(() => undefined, 1_000);
 else if (stdin === "OVERSIZE") process.stdout.write("x".repeat(8_192));
-else
+else {
+  const schema = args[args.indexOf("--json-schema") + 1];
+  const phase = schema.includes('"cross-examination"')
+    ? "cross-examination"
+    : schema.includes('"final"')
+      ? "final"
+      : "initial";
+  const result =
+    phase === "initial"
+      ? { phase, claims: [], evidence: [] }
+      : { phase, stances: [], newEvidence: [] };
+  const modelUsage =
+    stdin === "NO_OBSERVATION"
+      ? {}
+      : {
+          [stdin === "CROSS_CLASS"
+            ? "claude-sonnet-4"
+            : "claude-opus-4-20250514"]: { input_tokens: 1, output_tokens: 1 },
+        };
   process.stdout.write(
     JSON.stringify({
       is_error: false,
-      result: JSON.stringify({ phase: "initial", claims: [], evidence: [] }),
-      modelUsage: {
-        "claude-opus-4-20250514": { input_tokens: 1, output_tokens: 1 },
-      },
+      result: JSON.stringify(result),
+      modelUsage,
     }),
   );
+}

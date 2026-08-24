@@ -208,10 +208,10 @@ export class ClaudeAdapter implements AgentAdapter {
     }
   }
   async run(request: AgentRequest, signal: AbortSignal): Promise<AgentResult> {
+    this.validateSelection(request.modelSelection);
     const capabilities = await this.probe();
     if (!capabilities.available)
       return this.failed(request, 0, capabilities.diagnostics);
-    this.validateSelection(request.modelSelection);
     validateModelCapabilities(capabilities, request.modelSelection);
     if (request.responseSchema === undefined)
       return this.failed(request, 0, [
