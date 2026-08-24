@@ -689,15 +689,23 @@ export class DebateService {
         inputBoardId: boardRecord.id,
       });
       this.assertBoardBounds(config, board);
+      const finalContext = buildDeliberationContext(config, {
+        phase: "final",
+        topic: input.topic,
+        rules: phaseRules(),
+        board,
+        reviewClaimIds: board.claims.map((claim) => claim.id),
+        responseSchema: "final",
+      });
       const request = this.request(
         "final",
         input.topic,
-        board,
-        board.claims.map((claim) => claim.id),
+        finalContext.board,
+        finalContext.reviewClaimIds,
       );
       const finalSchema = createFinalPhaseResponseSchema(
-        board.claims.map((claim) => claim.id),
-        board.evidence.map((item) => item.id),
+        finalContext.board.claims.map((claim) => claim.id),
+        finalContext.board.evidence.map((item) => item.id),
       );
       const finalRuns = prepared.map((agent) => ({ agent, id: randomUUID() }));
       for (const run of finalRuns)

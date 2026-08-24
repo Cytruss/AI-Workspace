@@ -687,7 +687,7 @@ export class DeliberationRepository {
       if (input.roundId !== undefined) {
         const round = this.database
           .prepare(
-            "SELECT 1 FROM debate_rounds WHERE id=? AND session_id=? AND phase='final' AND status IN ('completed','partial') AND output_board_id=? AND finished_at IS NOT NULL",
+            "SELECT 1 FROM debate_rounds WHERE id=? AND session_id=? AND phase='final' AND status IN ('completed','partial','failed','cancelled') AND output_board_id=? AND finished_at IS NOT NULL",
           )
           .get(input.roundId, input.sessionId, input.boardId);
         if (round === undefined)

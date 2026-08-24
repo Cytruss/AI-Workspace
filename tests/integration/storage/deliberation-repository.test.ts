@@ -165,6 +165,57 @@ function setupImmutableAudit() {
 }
 
 describe("deliberation persistence", () => {
+  test("persists unresolved verdicts after a failed final round", () => {
+    const { database, sessions, session, deliberations } = setup();
+    const board = deliberations.createClaimBoard({
+      sessionId: session.id,
+      version: 99,
+      payload: { claims: [{ id: "claim-0001" }] },
+    });
+    deliberations.addClaim({
+      boardId: board.id,
+      canonicalId: "claim-0001",
+      normalizedText: "claim",
+      material: true,
+    });
+    const round = deliberations.createRound({
+      sessionId: session.id,
+      roundNumber: 99,
+      phase: "final",
+      status: "running",
+      inputBoardId: board.id,
+    });
+    sessions.createAgentRun({
+      id: "failed-final",
+      sessionId: session.id,
+      agentId: "codex",
+      roundId: round.id,
+      phase: "final",
+      purpose: "final",
+      inputBoardId: board.id,
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "final" },
+    });
+    sessions.finishAgentRun({
+      id: "failed-final",
+      status: "failed",
+      diagnostics: {},
+    });
+    deliberations.finishRound(round.id, "failed", board.id);
+    expect(() =>
+      deliberations.addVerdict({
+        sessionId: session.id,
+        boardId: board.id,
+        canonicalClaimId: "claim-0001",
+        roundId: round.id,
+        codexRunId: "failed-final",
+        classification: "UNRESOLVED",
+        evidenceSupport: "UNSUPPORTED",
+        verdict: { claimId: "claim-0001" },
+      }),
+    ).not.toThrow();
+    database.close();
+  });
   test("reconstructs exact phase calls and complete provenance without transcripts", () => {
     const { database, sessions, session, deliberations } = setup();
     const input = deliberations.createClaimBoard({
