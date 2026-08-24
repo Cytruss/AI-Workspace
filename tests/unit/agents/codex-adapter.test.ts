@@ -1,0 +1,120 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { describe, expect, test } from "vitest";
+import {
+  CodexAdapter,
+  buildCodexArguments,
+  parseCodexJsonl,
+} from "../../../src/agents/codex-adapter.js";
+
+const fixture = fileURLToPath(
+  new URL("../../fixtures/agent-output/codex-success.json", import.meta.url),
+);
+
+describe("Codex adapter arguments and JSONL parser", () => {
+  test.each([
+    [
+      "provider default",
+      undefined,
+      [
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "-C",
+        "C:/project",
+        "--output-schema",
+        "C:/private/schema.json",
+        "-",
+      ],
+    ],
+    [
+      "explicit model",
+      { class: "sol", cliModelId: "gpt-sol" },
+      [
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "-C",
+        "C:/project",
+        "--output-schema",
+        "C:/private/schema.json",
+        "--model",
+        "gpt-sol",
+        "-",
+      ],
+    ],
+    [
+      "explicit model with effort",
+      { class: "sol", cliModelId: "gpt;$(inert)", requestedEffort: "high" },
+      [
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "-C",
+        "C:/project",
+        "--output-schema",
+        "C:/private/schema.json",
+        "--model",
+        "gpt;$(inert)",
+        "--config",
+        'model_reasoning_effort="high"',
+        "-",
+      ],
+    ],
+  ])("builds exact hardened arguments for %s", (_name, selection, expected) => {
+    expect(
+      buildCodexArguments({
+        projectRoot: "C:/project",
+        schemaPath: "C:/private/schema.json",
+        modelSelection: selection,
+      }),
+    ).toEqual(expected);
+  });
+
+  test("extracts the completed structured JSON response from JSONL", async () => {
+    const output = await readFile(fixture, "utf8");
+    expect(parseCodexJsonl(output)).toEqual({
+      phase: "initial",
+      claims: [],
+      evidence: [],
+    });
+  });
+
+  test("fails closed when the required hardening flags are absent", async () => {
+    const adapter = new CodexAdapter(
+      {
+        command: "codex",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: () =>
+          Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout: "0.76.0",
+            stderr: "",
+            durationMs: 1,
+            termination: "exit",
+          }),
+      },
+    );
+    await expect(adapter.probe()).resolves.toMatchObject({
+      available: false,
+      diagnostics: [expect.stringContaining("Missing required")],
+    });
+  });
+});

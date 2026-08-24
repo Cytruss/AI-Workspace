@@ -1,0 +1,93 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { describe, expect, test } from "vitest";
+import {
+  CLAUDE_SETTINGS,
+  ClaudeAdapter,
+  buildClaudeArguments,
+  parseClaudeResult,
+} from "../../../src/agents/claude-adapter.js";
+
+const fixture = fileURLToPath(
+  new URL("../../fixtures/agent-output/claude-success.json", import.meta.url),
+);
+
+describe("Claude adapter arguments and JSON parser", () => {
+  const schema = '{"type":"object","properties":{"phase":{"const":"initial"}}}';
+  const safety = [
+    "--bare",
+    "--settings",
+    CLAUDE_SETTINGS,
+    "--tools",
+    "Read,Glob,Grep",
+    "--disallowedTools",
+    "mcp__*",
+    "--permission-mode",
+    "plan",
+    "--no-session-persistence",
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    schema,
+  ];
+
+  test.each([
+    ["provider default", undefined, safety],
+    [
+      "explicit model",
+      { class: "opus", cliModelId: "claude-opus" },
+      [...safety, "--model", "claude-opus"],
+    ],
+    [
+      "explicit model with effort",
+      { class: "opus", cliModelId: "claude;$(inert)", requestedEffort: "high" },
+      [...safety, "--model", "claude;$(inert)", "--effort", "high"],
+    ],
+  ])("builds exact hardened arguments for %s", (_name, selection, expected) => {
+    expect(buildClaudeArguments({ schema, modelSelection: selection })).toEqual(
+      expected,
+    );
+  });
+
+  test("extracts the successful result", async () => {
+    const output = await readFile(fixture, "utf8");
+    expect(parseClaudeResult(output)).toBe(
+      '{"phase":"initial","claims":[],"evidence":[]}',
+    );
+  });
+
+  test("rejects a classifier refusal", () => {
+    expect(() =>
+      parseClaudeResult(
+        '{"is_error":false,"result":"analysis","subtype":"error_during_execution"}',
+      ),
+    ).toThrow();
+  });
+
+  test("fails closed when the required hardening flags are absent", async () => {
+    const adapter = new ClaudeAdapter(
+      {
+        command: "claude",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: () =>
+          Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout: "2.1.233",
+            stderr: "",
+            durationMs: 1,
+            termination: "exit",
+          }),
+      },
+    );
+    await expect(adapter.probe()).resolves.toMatchObject({
+      available: false,
+      diagnostics: [expect.stringContaining("Missing required")],
+    });
+  });
+});

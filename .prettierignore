@@ -3,4 +3,5 @@ coverage/
 dist/
 docs/superpowers/
 node_modules/
+tests/fixtures/agent-output/
 pnpm-lock.yaml
