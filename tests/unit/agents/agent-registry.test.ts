@@ -53,6 +53,20 @@ describe("AgentRegistry", () => {
       "Agent adapter unavailable: claude",
     );
   });
+
+  test("probes arbitrary agent IDs in locale-independent ordinal order", async () => {
+    const registry = new AgentRegistry(
+      ["ä", "z", "a", "A", "!"].map((id) => adapter(id)),
+    );
+
+    expect(Object.keys(await registry.probeAll())).toEqual([
+      "!",
+      "A",
+      "a",
+      "z",
+      "ä",
+    ]);
+  });
 });
 
 describe("model selection boundary", () => {
@@ -106,14 +120,20 @@ describe("model selection boundary", () => {
 
   test("fails closed for unknown or disallowed requested effort", () => {
     const selection = resolveModelSelection(models, "sol");
+    const argumentBuilder = vi.fn();
+    const spawn = vi.fn();
+    const validateThenRun = (agentCapabilities: AgentCapabilities): void => {
+      validateModelCapabilities(agentCapabilities, selection);
+      argumentBuilder(selection);
+      spawn();
+    };
     expect(() => {
-      validateModelCapabilities(
+      validateThenRun(
         capabilities({ effortOption: { supported: true, flag: "--effort" } }),
-        selection,
       );
     }).toThrow(expect.objectContaining({ code: "AGENT_EFFORT_UNSUPPORTED" }));
     expect(() => {
-      validateModelCapabilities(
+      validateThenRun(
         capabilities({
           effortOption: {
             supported: true,
@@ -121,9 +141,10 @@ describe("model selection boundary", () => {
             allowedValues: ["low"],
           },
         }),
-        selection,
       );
     }).toThrow(expect.objectContaining({ code: "AGENT_EFFORT_UNSUPPORTED" }));
+    expect(argumentBuilder).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
     expect(() => {
       validateModelCapabilities(capabilities(), selection);
     }).not.toThrow();

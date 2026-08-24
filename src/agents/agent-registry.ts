@@ -147,7 +147,7 @@ export class AgentRegistry {
   async probeAll(): Promise<Record<string, AgentCapabilities>> {
     const entries = await Promise.all(
       [...this.adapters.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(async ([id, adapter]) => [id, await adapter.probe()] as const),
     );
     return Object.fromEntries(entries);

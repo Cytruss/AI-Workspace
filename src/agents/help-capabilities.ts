@@ -13,7 +13,11 @@ export class AgentCapabilityError extends Error {
 }
 
 export function requireHelpFlags(help: string, flags: readonly string[]): void {
-  const tokens = new Set(help.match(/-{1,2}[A-Za-z0-9][A-Za-z0-9-]*/g) ?? []);
-  const missing = flags.filter((flag) => !tokens.has(flag));
+  const missing = flags.filter((flag) => {
+    const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return !new RegExp(`(?:^|[^-A-Za-z0-9_])${escaped}(?![-A-Za-z0-9_])`).test(
+      help,
+    );
+  });
   if (missing.length > 0) throw new AgentCapabilityError(missing);
 }

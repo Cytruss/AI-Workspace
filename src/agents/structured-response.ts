@@ -372,6 +372,29 @@ export const ClaimBoardSchema = z
     }
   });
 
+export const DebateRoundSchema = z
+  .object({
+    id: z.string().min(1).max(MAX_ID_LENGTH),
+    sessionId: z.string().min(1).max(MAX_ID_LENGTH),
+    roundNumber: z.number().int().positive(),
+    phase: z.enum(["initial", "cross-examination", "final"]),
+    status: z.enum(["running", "completed", "partial", "failed", "cancelled"]),
+    inputBoardId: z.string().min(1).max(MAX_ID_LENGTH).optional(),
+    outputBoardId: z.string().min(1).max(MAX_ID_LENGTH).optional(),
+    createdAt: z.iso.datetime(),
+    finishedAt: z.iso.datetime().optional(),
+  })
+  .superRefine((round, context) => {
+    if (
+      round.status === "running" &&
+      (round.outputBoardId !== undefined || round.finishedAt !== undefined)
+    ) {
+      issue(context, "A running round cannot have output or finish references");
+    } else if (round.status !== "running" && round.finishedAt === undefined) {
+      issue(context, "A terminal round requires a finish timestamp");
+    }
+  });
+
 export const FinalPositionSchema = z.object({
   agentId: z.string().min(1).max(MAX_ID_LENGTH),
   agentRunId: z.string().min(1).max(MAX_ID_LENGTH),
@@ -399,22 +422,32 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-export const VerdictSchema = z
-  .object({
-    claimId: CanonicalClaimIdSchema,
-    classification: z.enum([
-      "CONSENSUS",
-      "DISAGREEMENT",
-      "REJECTED",
-      "UNRESOLVED",
-    ]),
-    support: z.enum(["VERIFIED", "UNSUPPORTED"]),
-    finalStances: z.array(StanceRecordSchema).max(2),
-    evidence: z.array(CanonicalEvidenceSchema).max(200),
-    provenance: z.array(ClaimOriginSchema).max(200),
-    counts: VerdictCountsSchema,
-  })
-  .transform(deepFreeze);
+export type DeepReadonly<T> = T extends readonly unknown[]
+  ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+  : T extends object
+    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+    : T;
+
+const VerdictValueSchema = z.object({
+  claimId: CanonicalClaimIdSchema,
+  classification: z.enum([
+    "CONSENSUS",
+    "DISAGREEMENT",
+    "REJECTED",
+    "UNRESOLVED",
+  ]),
+  support: z.enum(["VERIFIED", "UNSUPPORTED"]),
+  finalStances: z.array(StanceRecordSchema).max(2),
+  evidence: z.array(CanonicalEvidenceSchema).max(200),
+  provenance: z.array(ClaimOriginSchema).max(200),
+  counts: VerdictCountsSchema,
+});
+
+export type Verdict = DeepReadonly<z.infer<typeof VerdictValueSchema>>;
+
+export const VerdictSchema = VerdictValueSchema.transform(
+  (value): Verdict => deepFreeze(value) as Verdict,
+);
 
 export type ClaimOrigin = z.infer<typeof ClaimOriginSchema>;
 export type EvidenceOrigin = z.infer<typeof EvidenceOriginSchema>;
@@ -422,7 +455,7 @@ export type CanonicalClaim = z.infer<typeof CanonicalClaimSchema>;
 export type CanonicalEvidence = z.infer<typeof CanonicalEvidenceSchema>;
 export type CanonicalStance = z.infer<typeof CanonicalStanceSchema>;
 export type ClaimBoard = z.infer<typeof ClaimBoardSchema>;
+export type DebateRound = z.infer<typeof DebateRoundSchema>;
 export type FinalPosition = z.infer<typeof FinalPositionSchema>;
 export type StanceRecord = z.infer<typeof StanceRecordSchema>;
 export type VerdictCounts = z.infer<typeof VerdictCountsSchema>;
-export type Verdict = Readonly<z.infer<typeof VerdictSchema>>;

@@ -1,14 +1,30 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
+import type { z } from "zod";
 import {
   CanonicalClaimSchema,
   CanonicalEvidenceSchema,
   ClaimBoardSchema,
+  DebateRoundSchema,
   FinalPositionSchema,
   InitialPhaseResponseSchema,
   VerdictSchema,
   createCrossExaminationPhaseResponseSchema,
   createFinalPhaseResponseSchema,
 } from "../../../src/agents/structured-response.js";
+import type {
+  CanonicalEvidence,
+  ClaimOrigin,
+  DebateRound,
+  StanceRecord,
+  Verdict,
+  VerdictCounts,
+} from "../../../src/agents/structured-response.js";
+
+type DeepReadonly<T> = T extends readonly unknown[]
+  ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+  : T extends object
+    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+    : T;
 
 const evidence = {
   localId: "ev-local",
@@ -118,16 +134,53 @@ describe("InitialPhaseResponseSchema", () => {
 });
 
 describe("later phase response schemas", () => {
+  const otherProviderBoard = ClaimBoardSchema.parse({
+    version: 1,
+    claims: [
+      {
+        id: "claim-0001",
+        text: "A claim originating from Claude",
+        material: true,
+        evidenceIds: ["evidence-0001"],
+        origins: [
+          {
+            agentId: "claude",
+            agentRunId: "claude-initial-run",
+            providerLocalId: "claude-local-claim",
+          },
+        ],
+      },
+    ],
+    evidence: [
+      {
+        id: "evidence-0001",
+        status: "VERIFIED",
+        trackedPath: "src/index.ts",
+        origins: [
+          {
+            agentId: "claude",
+            agentRunId: "claude-initial-run",
+            providerLocalId: "claude-local-evidence",
+          },
+        ],
+      },
+    ],
+  });
   const crossSchema = createCrossExaminationPhaseResponseSchema(
-    ["claim-0001"],
-    ["evidence-0001"],
+    otherProviderBoard.claims.map((claim) => claim.id),
+    otherProviderBoard.evidence.map((entry) => entry.id),
   );
   const finalSchema = createFinalPhaseResponseSchema(
     ["claim-0001", "claim-0002"],
     ["evidence-0001"],
   );
+  const finalSecondStance = {
+    ...stance,
+    claimId: "claim-0002",
+    newEvidenceLocalIds: [],
+  };
 
-  test("cross-examination accepts an exact supplied canonical review set", () => {
+  test("cross-examination accepts a claim originating from the other provider", () => {
     expect(
       crossSchema.parse({
         phase: "cross-examination",
@@ -136,6 +189,7 @@ describe("later phase response schemas", () => {
         future: true,
       }),
     ).toMatchObject({ phase: "cross-examination", future: true });
+    expect(otherProviderBoard.claims[0]?.origins[0]?.agentId).toBe("claude");
   });
 
   test.each([
@@ -237,16 +291,11 @@ describe("later phase response schemas", () => {
   });
 
   test("final requires exactly one stance for every board claim", () => {
-    const second = {
-      ...stance,
-      claimId: "claim-0002",
-      newEvidenceLocalIds: [],
-    };
     const newEvidence = [{ ...evidence, localId: "ev-new" }];
     expect(
       finalSchema.parse({
         phase: "final",
-        stances: [stance, second],
+        stances: [stance, finalSecondStance],
         newEvidence,
       }),
     ).toMatchObject({ phase: "final" });
@@ -256,7 +305,11 @@ describe("later phase response schemas", () => {
     expect(() =>
       finalSchema.parse({
         phase: "final",
-        stances: [stance, second, { ...stance, claimId: "claim-0003" }],
+        stances: [
+          stance,
+          finalSecondStance,
+          { ...stance, claimId: "claim-0003" },
+        ],
         newEvidence,
       }),
     ).toThrow();
@@ -265,6 +318,85 @@ describe("later phase response schemas", () => {
         phase: "final",
         stances: [stance, stance],
         newEvidence,
+      }),
+    ).toThrow();
+  });
+
+  test.each([
+    ["reserved claims", { claims: [] }],
+    ["reserved initial evidence", { evidence: [] }],
+    [
+      "local claim namespace",
+      {
+        stances: [{ ...stance, claimId: "local-claim" }, finalSecondStance],
+      },
+    ],
+    [
+      "unknown existing evidence",
+      {
+        stances: [
+          { ...stance, existingEvidenceIds: ["evidence-9999"] },
+          finalSecondStance,
+        ],
+      },
+    ],
+    [
+      "local ID in canonical evidence namespace",
+      {
+        stances: [
+          { ...stance, existingEvidenceIds: ["local-evidence"] },
+          finalSecondStance,
+        ],
+      },
+    ],
+    [
+      "duplicate existing evidence",
+      {
+        stances: [
+          {
+            ...stance,
+            existingEvidenceIds: ["evidence-0001", "evidence-0001"],
+          },
+          finalSecondStance,
+        ],
+      },
+    ],
+    [
+      "duplicate new evidence declaration",
+      {
+        stances: [{ ...stance, newEvidenceLocalIds: [] }, finalSecondStance],
+        newEvidence: [
+          { ...evidence, localId: "ev-new" },
+          { ...evidence, localId: "ev-new" },
+        ],
+      },
+    ],
+    [
+      "canonical ID in local evidence namespace",
+      {
+        stances: [
+          { ...stance, newEvidenceLocalIds: ["evidence-0002"] },
+          finalSecondStance,
+        ],
+        newEvidence: [{ ...evidence, localId: "evidence-0002" }],
+      },
+    ],
+    [
+      "dangling or cross-run new evidence",
+      {
+        stances: [
+          { ...stance, newEvidenceLocalIds: ["other-run-evidence"] },
+          finalSecondStance,
+        ],
+      },
+    ],
+  ])("final rejects %s", (_name, overrides) => {
+    expect(() =>
+      finalSchema.parse({
+        phase: "final",
+        stances: [stance, finalSecondStance],
+        newEvidence: [{ ...evidence, localId: "ev-new" }],
+        ...overrides,
       }),
     ).toThrow();
   });
@@ -319,6 +451,57 @@ describe("normalized host records", () => {
     ).toMatchObject({ roundId: "round-1" });
   });
 
+  test("normalizes a round with exact board references and stable ordering", () => {
+    type ParsedRound = z.output<typeof DebateRoundSchema>;
+    expectTypeOf<ParsedRound>().toEqualTypeOf<DebateRound>();
+    expect(
+      DebateRoundSchema.parse({
+        id: "round-2",
+        sessionId: "session-1",
+        roundNumber: 2,
+        phase: "cross-examination",
+        status: "completed",
+        inputBoardId: "board-1",
+        outputBoardId: "board-2",
+        createdAt: "2026-08-24T20:00:00.000Z",
+        finishedAt: "2026-08-24T20:01:00.000Z",
+        ignoredProviderField: true,
+      }),
+    ).toEqual({
+      id: "round-2",
+      sessionId: "session-1",
+      roundNumber: 2,
+      phase: "cross-examination",
+      status: "completed",
+      inputBoardId: "board-1",
+      outputBoardId: "board-2",
+      createdAt: "2026-08-24T20:00:00.000Z",
+      finishedAt: "2026-08-24T20:01:00.000Z",
+    });
+  });
+
+  test.each([
+    ["zero ordering", { roundNumber: 0 }],
+    ["unknown phase", { phase: "cross_examination" }],
+    ["unknown status", { status: "pending" }],
+    ["malformed timestamp", { createdAt: "today" }],
+    ["running output board", { outputBoardId: "board-2" }],
+    ["running finish timestamp", { finishedAt: "2026-08-24T20:01:00.000Z" }],
+    ["terminal status without finish timestamp", { status: "completed" }],
+  ])("rejects a round with %s", (_name, override) => {
+    expect(() =>
+      DebateRoundSchema.parse({
+        id: "round-1",
+        sessionId: "session-1",
+        roundNumber: 1,
+        phase: "initial",
+        status: "running",
+        createdAt: "2026-08-24T20:00:00.000Z",
+        ...override,
+      }),
+    ).toThrow();
+  });
+
   test("constructs deeply immutable verdicts", () => {
     const verdict = VerdictSchema.parse({
       claimId: "claim-0001",
@@ -352,5 +535,20 @@ describe("normalized host records", () => {
     expect(Object.isFrozen(verdict.finalStances)).toBe(true);
     expect(Object.isFrozen(verdict.evidence[0]?.origins)).toBe(true);
     expect(Object.isFrozen(verdict.counts)).toBe(true);
+  });
+
+  test("exposes deeply readonly verdict output types", () => {
+    type ParsedVerdict = z.output<typeof VerdictSchema>;
+    type ReadonlyStances = readonly DeepReadonly<StanceRecord>[];
+    type ReadonlyEvidence = readonly DeepReadonly<CanonicalEvidence>[];
+    type ReadonlyOrigins = readonly DeepReadonly<ClaimOrigin>[];
+
+    expectTypeOf<Verdict["finalStances"]>().toEqualTypeOf<ReadonlyStances>();
+    expectTypeOf<Verdict["evidence"]>().toEqualTypeOf<ReadonlyEvidence>();
+    expectTypeOf<Verdict["provenance"]>().toEqualTypeOf<ReadonlyOrigins>();
+    expectTypeOf<Verdict["counts"]>().toEqualTypeOf<
+      DeepReadonly<VerdictCounts>
+    >();
+    expectTypeOf<ParsedVerdict>().toEqualTypeOf<Verdict>();
   });
 });

@@ -23,6 +23,15 @@ describe("requireHelpFlags", () => {
     }).toThrow("Missing required CLI capabilities: --json, --read-only");
   });
 
+  test.each(["---json", "--json_value", "--json2"])(
+    "rejects malformed token %s for --json",
+    (help) => {
+      expect(() => {
+        requireHelpFlags(`Usage: tool ${help}`, ["--json"]);
+      }).toThrow("Missing required CLI capability: --json");
+    },
+  );
+
   test("uses the singular actionable diagnostic", () => {
     expect(() => {
       requireHelpFlags("Usage: tool --json", ["--json", "--read-only"]);
