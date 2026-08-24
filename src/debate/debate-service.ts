@@ -206,7 +206,14 @@ export class DebateService {
   ) {
     const snapshot = { ...board, version: board.version + 1 };
     this.assertBoardBounds(config, snapshot);
-    return { board: snapshot, record: this.persistBoard(sessionId, snapshot) };
+    return {
+      board: snapshot,
+      record: this.dependencies.deliberation.createClaimBoard({
+        sessionId,
+        version: snapshot.version,
+        payload: snapshot,
+      }),
+    };
   }
 
   private request(

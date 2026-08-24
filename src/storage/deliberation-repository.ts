@@ -489,7 +489,7 @@ export class DeliberationRepository {
       const id = input.id ?? randomUUID();
       this.database
         .prepare(
-          "INSERT INTO claim_origins (id, board_id, canonical_claim_id, agent_id, agent_run_id, provider_local_id) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT OR IGNORE INTO claim_origins (id, board_id, canonical_claim_id, agent_id, agent_run_id, provider_local_id) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .run(
           id,
@@ -536,7 +536,7 @@ export class DeliberationRepository {
       const id = input.id ?? randomUUID();
       this.database
         .prepare(
-          "INSERT INTO evidence_origins (id, board_id, session_id, canonical_evidence_id, agent_id, agent_run_id, provider_local_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          "INSERT OR IGNORE INTO evidence_origins (id, board_id, session_id, canonical_evidence_id, agent_id, agent_run_id, provider_local_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .run(
           id,
