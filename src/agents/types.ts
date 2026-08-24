@@ -17,6 +17,9 @@ export type ResolvedModelSelection = Readonly<{
   requestedEffort?: string;
 }>;
 
+export type AgentStructuredResult =
+  ProviderPhaseResponse | Readonly<{ phase: "ask"; content: string }>;
+
 export interface AgentCapabilities {
   available: boolean;
   version?: string;
@@ -41,12 +44,9 @@ export interface AgentRequest {
   prompt: string;
   timeoutMs: number;
   maxOutputBytes: number;
-  responseSchema?: z.ZodType<ProviderPhaseResponse>;
+  responseSchema?: z.ZodType<AgentStructuredResult>;
   modelSelection?: ResolvedModelSelection;
 }
-
-export type AgentStructuredResult =
-  ProviderPhaseResponse | Readonly<{ phase: "ask"; content: string }>;
 
 export interface AgentResult {
   agentId: AgentId;

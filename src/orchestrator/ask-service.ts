@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import {
   AgentBoundaryError,
   AgentRegistry,
@@ -30,6 +31,10 @@ import { ConcurrencyGate } from "./concurrency-gate.js";
 import type { AskInput, AskReport } from "./types.js";
 
 export type { AskInput, AskReport } from "./types.js";
+
+export const AskResponseSchema = z
+  .object({ phase: z.literal("ask"), content: z.string() })
+  .readonly();
 
 type AskConfig = Readonly<{
   concurrency: number;
@@ -88,10 +93,18 @@ function storedResult(run: AgentRunRecord): AgentResult {
     typeof response.content === "string"
       ? response.content
       : undefined;
+  const structured =
+    response !== undefined &&
+    response !== null &&
+    typeof response === "object" &&
+    "structured" in response
+      ? AskResponseSchema.safeParse(response.structured)
+      : undefined;
   return {
     agentId: run.agentId,
     status: run.status === "running" ? "failed" : run.status,
     ...(content === undefined ? {} : { response: content }),
+    ...(structured?.success === true ? { structured: structured.data } : {}),
     ...(run.exitCode === undefined ? {} : { exitCode: run.exitCode }),
     durationMs: run.durationMs,
     modelExecution: run.modelExecution,
@@ -100,6 +113,22 @@ function storedResult(run: AgentRunRecord): AgentResult {
           (item): item is string => typeof item === "string",
         )
       : [],
+  };
+}
+
+function normalizeResult(result: AgentResult): AgentResult {
+  const parsed = AskResponseSchema.safeParse(result.structured);
+  const normalized =
+    result.response === undefined && parsed.success
+      ? { ...result, response: parsed.data.content }
+      : result;
+  if (normalized.status !== "timed_out") return normalized;
+  return {
+    ...normalized,
+    status: "failed",
+    diagnostics: normalized.diagnostics.includes("TIMED_OUT")
+      ? normalized.diagnostics
+      : [...normalized.diagnostics, "TIMED_OUT"],
   };
 }
 
@@ -300,6 +329,7 @@ export class AskService {
       prompt: question,
       timeoutMs: agent.config.timeoutMs,
       maxOutputBytes: agent.config.maxOutputBytes,
+      responseSchema: AskResponseSchema,
       ...(agent.selection === undefined
         ? {}
         : { modelSelection: agent.selection }),
@@ -317,8 +347,8 @@ export class AskService {
       diagnostics: [],
     });
     try {
-      const result = await this.gate.run(signal, () =>
-        agent.adapter.run(requested, signal),
+      const result = normalizeResult(
+        await this.gate.run(signal, () => agent.adapter.run(requested, signal)),
       );
       const persistedStatus =
         result.status === "completed"
@@ -330,8 +360,16 @@ export class AskService {
         id: runId,
         status: persistedStatus,
         modelExecution: storageExecution(result.modelExecution),
-        ...(result.status === "completed"
-          ? { response: { phase: "ask", content: result.response ?? "" } }
+        ...(result.status === "completed" || result.structured !== undefined
+          ? {
+              response: {
+                phase: "ask",
+                content: result.response ?? result.structured?.content ?? "",
+                ...(result.structured === undefined
+                  ? {}
+                  : { structured: result.structured }),
+              },
+            }
           : {}),
         ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
         durationMs: result.durationMs,
