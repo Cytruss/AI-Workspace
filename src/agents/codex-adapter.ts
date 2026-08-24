@@ -60,13 +60,17 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
 export function parseCodexJsonl(output: string): unknown {
   let response: unknown;
   let agentMessageCompleted = false;
+  let turnCompleted = false;
   for (const line of output.split(/\r?\n/)) {
     if (line.trim() === "") continue;
     const event: unknown = JSON.parse(line);
+    if (turnCompleted) {
+      throw new Error("Codex JSONL included an event after turn completion");
+    }
     if (typeof event !== "object" || event === null) continue;
     const type = (event as { type?: unknown }).type;
     if (type === "turn.completed") {
-      if (agentMessageCompleted && response !== undefined) return response;
+      turnCompleted = true;
       continue;
     }
     if (type !== "item.completed") continue;
@@ -78,6 +82,9 @@ export function parseCodexJsonl(output: string): unknown {
       response = JSON.parse(text);
       agentMessageCompleted = true;
     }
+  }
+  if (turnCompleted && agentMessageCompleted && response !== undefined) {
+    return response;
   }
   throw new Error(
     "Codex JSONL did not include a completed structured response",

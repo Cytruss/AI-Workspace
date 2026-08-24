@@ -113,17 +113,17 @@ describe("Codex adapter arguments and JSONL parser", () => {
     ).toThrow();
   });
 
-  test("does not replace a completed agent message with a later uncompleted message", () => {
+  test("rejects an agent message after turn completion", () => {
     const event = (selected: string) =>
       JSON.stringify({
         type: "item.completed",
         item: { type: "agent_message", text: JSON.stringify({ selected }) },
       });
-    expect(
+    expect(() =>
       parseCodexJsonl(
         [event("A"), '{"type":"turn.completed"}', event("B")].join("\n"),
       ),
-    ).toEqual({ selected: "A" });
+    ).toThrow();
   });
 
   test("rejects an unconfigured structural selection before probing", async () => {
