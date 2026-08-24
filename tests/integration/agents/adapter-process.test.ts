@@ -1,13 +1,27 @@
+import { access } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { ClaudeAdapter } from "../../../src/agents/claude-adapter.js";
+import {
+  CLAUDE_SETTINGS,
+  ClaudeAdapter,
+} from "../../../src/agents/claude-adapter.js";
 import { CodexAdapter } from "../../../src/agents/codex-adapter.js";
 import { InitialPhaseResponseSchema } from "../../../src/agents/structured-response.js";
-import type { ProcessRequest } from "../../../src/platform/process-runner.js";
+import {
+  runProcess,
+  type ProcessRequest,
+} from "../../../src/platform/process-runner.js";
 import type { AgentConfig } from "../../../src/config/schema.js";
 
 const snapshot = { porcelainV2: "", dirtyPathFingerprints: "[]" };
+const codexCli = fileURLToPath(
+  new URL("../../fake-agents/codex-cli.mjs", import.meta.url),
+);
+const claudeCli = fileURLToPath(
+  new URL("../../fake-agents/claude-cli.mjs", import.meta.url),
+);
 const config: AgentConfig = {
-  command: "fake-agent",
+  command: "configured-provider",
   timeoutMs: 1_000,
   maxOutputBytes: 4_096,
   models: {
@@ -23,123 +37,123 @@ const config: AgentConfig = {
     ],
   },
 };
-const codexHelp =
-  "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --sandbox --model --config -C model_reasoning_effort=low|high";
-const claudeHelp =
-  "--bare --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage --effort values: low|high";
 
-describe("hardened adapter lifecycle", () => {
-  test("Codex transports the schema by one temporary file and removes it after a bounded run", async () => {
+function fixtureRunner(script: string, calls: ProcessRequest[]) {
+  return (request: ProcessRequest) => {
+    calls.push(request);
+    return runProcess({
+      ...request,
+      command: process.execPath,
+      args: [script, ...request.args],
+    });
+  };
+}
+function request(prompt: string, maxOutputBytes = 4_096) {
+  return {
+    runId: "run-1",
+    projectRoot: process.cwd(),
+    mode: "observe" as const,
+    prompt,
+    timeoutMs: 500,
+    maxOutputBytes,
+    responseSchema: InitialPhaseResponseSchema,
+  };
+}
+
+describe("hardened adapter lifecycle with fake Node providers", () => {
+  test("Codex uses a real bounded process with private schema transport and inert stdin", async () => {
     const calls: ProcessRequest[] = [];
     const adapter = new CodexAdapter(config, {
-      runProcess: (request) => {
-        calls.push(request);
-        const stdout =
-          request.args[0] === "--version"
-            ? "0.76.0"
-            : request.args.includes("--help")
-              ? codexHelp
-              : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"initial\\",\\"claims\\":[],\\"evidence\\":[]}"}}\n{"type":"turn.completed"}\n';
-        return Promise.resolve({
-          exitCode: 0,
-          signal: null,
-          stdout,
-          stderr: "",
-          durationMs: 1,
-          termination: "exit",
-        });
-      },
+      runProcess: fixtureRunner(codexCli, calls),
       captureGitIntegrity: () => Promise.resolve(snapshot),
     });
     const result = await adapter.run(
-      {
-        runId: "run-1",
-        projectRoot: process.cwd(),
-        mode: "observe",
-        prompt: "inert $(value)",
-        timeoutMs: 500,
-        maxOutputBytes: 512,
-        responseSchema: InitialPhaseResponseSchema,
-      },
+      request("inert $(value)"),
       new AbortController().signal,
     );
-    const invocation = calls.at(-1);
+    const invoke = calls.at(-1);
+    const path = invoke?.args[invoke.args.indexOf("--output-schema") + 1];
     expect(result).toMatchObject({
       status: "completed",
-      modelExecution: { verification: "unverified" },
+      structured: { phase: "initial" },
     });
-    expect(invocation?.stdin).toBe("inert $(value)");
-    expect(invocation?.args).toContain("--output-schema");
-    expect(invocation?.args).not.toContain("--model");
+    expect(invoke?.stdin).toBe("inert $(value)");
+    expect(invoke?.args).toEqual(
+      expect.arrayContaining([
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "-C",
+        process.cwd(),
+        "--output-schema",
+      ]),
+    );
+    await expect(access(path ?? "")).rejects.toThrow();
   });
 
-  test("Claude verifies a same-class observed alias and rejects managed cross-class fallback after execution", async () => {
-    let runCount = 0;
+  test("Claude uses real bounded process with exact isolation settings and inline schema", async () => {
+    const calls: ProcessRequest[] = [];
     const adapter = new ClaudeAdapter(config, {
-      runProcess: (request) => {
-        if (request.args[0] === "--version")
-          return Promise.resolve({
-            exitCode: 0,
-            signal: null,
-            stdout: "2.1.233",
-            stderr: "",
-            durationMs: 1,
-            termination: "exit",
-          });
-        if (request.args[0] === "--help")
-          return Promise.resolve({
-            exitCode: 0,
-            signal: null,
-            stdout: claudeHelp,
-            stderr: "",
-            durationMs: 1,
-            termination: "exit",
-          });
-        runCount += 1;
-        return Promise.resolve({
-          exitCode: 0,
-          signal: null,
-          stdout: JSON.stringify({
-            is_error: false,
-            result: '{"phase":"initial","claims":[],"evidence":[]}',
-            modelUsage: {
-              [runCount === 1 ? "claude-opus-4-20250514" : "claude-sonnet-4"]: {
-                input_tokens: 1,
-                output_tokens: 1,
-              },
-            },
-          }),
-          stderr: "",
-          durationMs: 1,
-          termination: "exit",
-        });
-      },
+      runProcess: fixtureRunner(claudeCli, calls),
       captureGitIntegrity: () => Promise.resolve(snapshot),
     });
-    const request = {
-      runId: "run-1",
-      projectRoot: process.cwd(),
-      mode: "observe" as const,
-      prompt: "review",
-      timeoutMs: 500,
-      maxOutputBytes: 512,
-      responseSchema: InitialPhaseResponseSchema,
-      modelSelection: { class: "opus", cliModelId: "claude-opus" },
-    };
-    await expect(
-      adapter.run(request, new AbortController().signal),
-    ).resolves.toMatchObject({
+    const result = await adapter.run(
+      request("review"),
+      new AbortController().signal,
+    );
+    const invoke = calls.at(-1);
+    const settings = invoke?.args.indexOf("--settings") ?? -1;
+    const schema = invoke?.args.indexOf("--json-schema") ?? -1;
+    expect(result).toMatchObject({
       status: "completed",
-      modelExecution: {
-        verification: "verified",
-        observedModelIds: ["claude-opus-4-20250514"],
-      },
+      modelExecution: { observedModelIds: ["claude-opus-4-20250514"] },
     });
-    const rejected = await adapter.run(request, new AbortController().signal);
-    expect(rejected.status).toBe("failed");
-    expect(rejected.diagnostics).toContain("MODEL_CLASS_CHANGED");
-    expect(rejected.modelExecution.observedModelIds).toEqual([
-      "claude-sonnet-4",
-    ]);
+    expect(invoke?.args[settings + 1]).toBe(CLAUDE_SETTINGS);
+    expect(invoke?.args).toEqual(
+      expect.arrayContaining([
+        "--bare",
+        "--tools",
+        "Read,Glob,Grep",
+        "--disallowedTools",
+        "mcp__*",
+        "--permission-mode",
+        "plan",
+        "--no-session-persistence",
+        "-p",
+        "--output-format",
+        "json",
+      ]),
+    );
+    expect(invoke?.args[schema + 1]).toContain('"phase"');
+    expect(invoke?.args).not.toEqual(
+      expect.arrayContaining(["Bash", "Edit", "Write", "Notebook"]),
+    );
   });
+
+  test.each([
+    ["Codex", codexCli, CodexAdapter],
+    ["Claude", claudeCli, ClaudeAdapter],
+  ] as const)(
+    "%s maps real output limit and cancellation",
+    async (_name, script, Adapter) => {
+      const calls: ProcessRequest[] = [];
+      const adapter = new Adapter(config, {
+        runProcess: fixtureRunner(script, calls),
+        captureGitIntegrity: () => Promise.resolve(snapshot),
+      });
+      await expect(
+        adapter.run(request("OVERSIZE", 128), new AbortController().signal),
+      ).resolves.toMatchObject({ status: "failed" });
+      const controller = new AbortController();
+      const running = adapter.run(request("HANG"), controller.signal);
+      setTimeout(() => {
+        controller.abort();
+      }, 50);
+      await expect(running).resolves.toMatchObject({ status: "cancelled" });
+    },
+  );
 });
