@@ -56,6 +56,7 @@ export interface CreateAgentRunInput {
 export interface FinishAgentRunInput {
   id: string;
   status: Exclude<AgentRunStatus, "running">;
+  modelExecution?: ModelExecution;
   response?: unknown;
   outputBoardId?: string;
   exitCode?: number;
@@ -495,6 +496,8 @@ export class SessionRepository {
       throw new Error(
         "Agent output boards are linked when their round finishes",
       );
+    if (input.modelExecution !== undefined)
+      validateExecution(input.modelExecution);
     this.database.transaction(() => {
       const row = this.database
         .prepare("SELECT phase, status FROM agent_runs WHERE id=?")
@@ -509,9 +512,16 @@ export class SessionRepository {
           : providerEnvelopeJson(input.response, row.phase, "Agent response");
       this.database
         .prepare(
-          "UPDATE agent_runs SET response_json = ?, output_board_id = COALESCE(?, output_board_id), status = ?, exit_code = ?, duration_ms = COALESCE(?, duration_ms), diagnostics_json = ?, finished_at = ? WHERE id = ? AND status = 'running'",
+          "UPDATE agent_runs SET requested_model_class = COALESCE(?, requested_model_class), requested_model_id = COALESCE(?, requested_model_id), requested_effort = COALESCE(?, requested_effort), observed_model_ids_json = COALESCE(?, observed_model_ids_json), model_verification = COALESCE(?, model_verification), response_json = ?, output_board_id = COALESCE(?, output_board_id), status = ?, exit_code = ?, duration_ms = COALESCE(?, duration_ms), diagnostics_json = ?, finished_at = ? WHERE id = ? AND status = 'running'",
         )
         .run(
+          input.modelExecution?.requestedClass ?? null,
+          input.modelExecution?.requestedCliModelId ?? null,
+          input.modelExecution?.requestedEffort ?? null,
+          input.modelExecution === undefined
+            ? null
+            : JSON.stringify(input.modelExecution.observedModelIds),
+          input.modelExecution?.verification ?? null,
           responseJson,
           input.outputBoardId ?? null,
           input.status,
@@ -611,5 +621,13 @@ export class SessionRepository {
       createdAt: row.created_at,
       ...(row.finished_at === null ? {} : { finishedAt: row.finished_at }),
     });
+  }
+  agentRuns(sessionId: string): readonly AgentRunRecord[] {
+    const ids = this.database
+      .prepare(
+        "SELECT id FROM agent_runs WHERE session_id = ? ORDER BY created_at, id",
+      )
+      .all(sessionId) as readonly { id: string }[];
+    return Object.freeze(ids.map(({ id }) => this.getAgentRun(id)));
   }
 }

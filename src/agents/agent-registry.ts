@@ -9,7 +9,7 @@ import type {
 } from "./types.js";
 
 interface ModelSettings {
-  readonly defaultModel?: string;
+  readonly defaultModel?: string | undefined;
   readonly selections: readonly Readonly<
     Pick<ModelSelection, "class" | "cliModelId" | "requestedEffort">
   >[];
