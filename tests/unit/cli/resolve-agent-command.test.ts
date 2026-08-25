@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { describe, expect, test } from "vitest";
 import { resolveAgentCommand } from "../../../src/cli/resolve-agent-command.js";
 import type {
@@ -65,6 +65,7 @@ describe("resolveAgentCommand", () => {
     const directory = join(tmpdir(), `ai-workspace-path-${String(Date.now())}`);
     await mkdir(directory, { recursive: true });
     const executable = join(directory, "claude.exe");
+    const expectedCommand = win32.join(directory, "claude.exe");
     await writeFile(executable, "native");
     const requests: ProcessRequest[] = [];
 
@@ -78,9 +79,12 @@ describe("resolveAgentCommand", () => {
       inspectWindowsShim: () => Promise.resolve(false),
     });
 
-    expect(resolution).toMatchObject({ command: executable, source: "path" });
+    expect(resolution).toMatchObject({
+      command: expectedCommand,
+      source: "path",
+    });
     expect(requests[0]).toMatchObject({
-      command: executable,
+      command: expectedCommand,
       args: ["--version"],
     });
     expect(requests[0]?.command).not.toContain("cmd.exe");
@@ -107,6 +111,14 @@ describe("resolveAgentCommand", () => {
     );
     await writeFile(shim, "x".repeat(160));
     await writeFile(native, "native");
+    const expectedCommand = win32.join(
+      npm,
+      "node_modules",
+      "@anthropic-ai",
+      "claude-code",
+      "bin",
+      "claude.exe",
+    );
     const requests: ProcessRequest[] = [];
 
     const resolution = await resolveAgentCommand({
@@ -124,10 +136,16 @@ describe("resolveAgentCommand", () => {
       inspectWindowsShim: () => Promise.resolve(true),
     });
 
-    expect(resolution).toMatchObject({ command: native, source: "candidate" });
+    expect(resolution).toMatchObject({
+      command: expectedCommand,
+      source: "candidate",
+    });
     expect(resolution.diagnostic).toContain("shim");
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ command: native, args: ["--version"] });
+    expect(requests[0]).toMatchObject({
+      command: expectedCommand,
+      args: ["--version"],
+    });
   });
 
   test("uses the documented Unix native launcher and produces actionable diagnostics when absent", async () => {
