@@ -83,7 +83,6 @@ function documentedCandidates(
   provider: AgentCommandProvider,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
-  inspectWindowsShim?: (candidate: string) => Promise<boolean>,
 ): string[] {
   if (provider !== "claude") return [];
   if (platform === "win32") {
