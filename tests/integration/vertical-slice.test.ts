@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 import { AgentRegistry } from "../../src/agents/agent-registry.js";
 import { ClaudeAdapter } from "../../src/agents/claude-adapter.js";
 import { CodexAdapter } from "../../src/agents/codex-adapter.js";
+import { InitialPhaseResponseSchema } from "../../src/agents/structured-response.js";
 import {
   runProcess,
   type ProcessRequest,
@@ -124,14 +125,13 @@ describe("dual-agent vertical slice", () => {
         },
       },
     };
-    const registry = new AgentRegistry([
-      new CodexAdapter(config.agents.codex, {
-        runProcess: fixtureRunner(codexCli, codexCalls),
-      }),
-      new ClaudeAdapter(config.agents.claude, {
-        runProcess: fixtureRunner(claudeCli, claudeCalls),
-      }),
-    ]);
+    const codexAdapter = new CodexAdapter(config.agents.codex, {
+      runProcess: fixtureRunner(codexCli, codexCalls),
+    });
+    const claudeAdapter = new ClaudeAdapter(config.agents.claude, {
+      runProcess: fixtureRunner(claudeCli, claudeCalls),
+    });
+    const registry = new AgentRegistry([codexAdapter, claudeAdapter]);
     const askService = new AskService({
       config,
       registry,
@@ -211,6 +211,21 @@ describe("dual-agent vertical slice", () => {
         .some((run) => run.modelExecution.verification === "verified"),
     ).toBe(true);
     expect(await captureGitIntegrity(projectRoot)).toEqual(before);
+    const cancellation = new AbortController();
+    const hanging = codexAdapter.run(
+      {
+        runId: "cancelled-vertical-run",
+        projectRoot,
+        mode: "observe",
+        prompt: "HANG",
+        timeoutMs: 1_000,
+        maxOutputBytes: 4_096,
+        responseSchema: InitialPhaseResponseSchema,
+      },
+      cancellation.signal,
+    );
+    setTimeout(() => cancellation.abort(), 25);
+    await expect(hanging).resolves.toMatchObject({ status: "cancelled" });
     database.close();
   });
 });
