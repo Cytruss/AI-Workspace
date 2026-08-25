@@ -10,13 +10,26 @@ describe("Discord response formatting", () => {
     const payload = formatModels({
       codex: {
         defaultModel: "sol",
-        selections: [{ class: "sol", cliModelId: "raw-codex-value", acceptedObservedModels: { exactIds: ["observed"], literalPrefixes: [] } }],
+        selections: [
+          {
+            class: "sol",
+            cliModelId: "raw-codex-value",
+            acceptedObservedModels: {
+              exactIds: ["observed"],
+              literalPrefixes: [],
+            },
+          },
+        ],
       },
       claude: { selections: [] },
     });
     expect(payload.content).toContain("Codex: sol (default)");
-    expect(payload.content).toContain("Claude: provider default (no configured class)");
-    expect(payload.content).toContain("Observation policy: exact IDs and literal prefixes");
+    expect(payload.content).toContain(
+      "Claude: provider default (no configured class)",
+    );
+    expect(payload.content).toContain(
+      "Observation policy: exact IDs and literal prefixes",
+    );
     expect(payload.content).toContain("not entitlement verification");
     expect(payload.content).not.toContain("raw-codex-value");
   });
@@ -27,8 +40,27 @@ describe("Discord response formatting", () => {
       status: "partial",
       project: { id: "demo", name: "Demo", root: "C:\\secret-root" },
       results: [
-        { agentId: "codex", status: "completed", response: "answer", durationMs: 1, diagnostics: [], modelExecution: { requestedClass: "sol", requestedCliModelId: "gpt-sol", requestedEffort: "high", observedModelIds: ["gpt-sol"], verification: "verified" } },
-        { agentId: "claude", status: "failed", durationMs: 1, diagnostics: ["provider failed /private/value"], modelExecution: { observedModelIds: [], verification: "unverified" } },
+        {
+          agentId: "codex",
+          status: "completed",
+          response: "answer",
+          durationMs: 1,
+          diagnostics: [],
+          modelExecution: {
+            requestedClass: "sol",
+            requestedCliModelId: "gpt-sol",
+            requestedEffort: "high",
+            observedModelIds: ["gpt-sol"],
+            verification: "verified",
+          },
+        },
+        {
+          agentId: "claude",
+          status: "failed",
+          durationMs: 1,
+          diagnostics: ["provider failed /private/value"],
+          modelExecution: { observedModelIds: [], verification: "unverified" },
+        },
       ],
     });
     expect(payload.content).toContain("Project: demo");
@@ -41,29 +73,165 @@ describe("Discord response formatting", () => {
     expect(payload.content).not.toContain("/private/value");
   });
 
+  test("never emits model content when model verification is unverified", () => {
+    const payload = formatAskReport({
+      sessionId: "session-unverified",
+      status: "completed",
+      project: { id: "demo", name: "Demo", root: "unused" },
+      results: [
+        {
+          agentId: "codex",
+          status: "completed",
+          response: "unverified model answer",
+          durationMs: 1,
+          diagnostics: [],
+          modelExecution: { observedModelIds: [], verification: "unverified" },
+        },
+      ],
+    });
+    expect(payload.content).not.toContain("unverified model answer");
+    expect(payload.content).toContain("Verification marker: unverified");
+    expect(payload.content).toContain("Safe diagnostics");
+  });
+
+  test("labels configured classes without a default as provider default by omission", () => {
+    const payload = formatModels({
+      codex: { selections: [{ class: "sol" }] },
+      claude: { selections: [] },
+    });
+    expect(payload.content).toContain(
+      "Codex: sol (provider default by omission)",
+    );
+  });
+
   test("renders debate verdict sections deterministically without relabeling model prose", () => {
     const report = {
-      sessionId: "session-2", status: "partial", classification: "DEBATE",
-      projectId: "demo", rounds: [], analyses: [
-        { agentId: "codex", runId: "run-c", status: "completed", content: "Model says rejected" },
-        { agentId: "claude", runId: "run-a", status: "completed", content: "Model says consensus" },
-      ], board: { version: 1, claims: [], evidence: [] },
-      consensus: [{ claimId: "claim-b", classification: "CONSENSUS", support: "UNSUPPORTED", finalStances: [], evidence: [], provenance: [], counts: { accept: 0, dispute: 0, uncertain: 0 } }],
-      disagreements: [{ claimId: "claim-a", classification: "DISAGREEMENT", support: "VERIFIED", finalStances: [], evidence: [], provenance: [], counts: { accept: 0, dispute: 0, uncertain: 0 } }],
-      rejected: [], unresolved: [], verdicts: [],
+      sessionId: "session-2",
+      status: "partial",
+      classification: "DEBATE",
+      projectId: "demo",
+      rounds: [],
+      analyses: [
+        {
+          agentId: "codex",
+          runId: "run-c",
+          status: "completed",
+          content: "Model says rejected",
+        },
+        {
+          agentId: "claude",
+          runId: "run-a",
+          status: "completed",
+          content: "Model says consensus",
+        },
+      ],
+      board: { version: 1, claims: [], evidence: [] },
+      consensus: [
+        {
+          claimId: "claim-b",
+          classification: "CONSENSUS",
+          support: "UNSUPPORTED",
+          finalStances: [],
+          evidence: [],
+          provenance: [],
+          counts: { accept: 0, dispute: 0, uncertain: 0 },
+        },
+      ],
+      disagreements: [
+        {
+          claimId: "claim-a",
+          classification: "DISAGREEMENT",
+          support: "VERIFIED",
+          finalStances: [],
+          evidence: [],
+          provenance: [],
+          counts: { accept: 0, dispute: 0, uncertain: 0 },
+        },
+      ],
+      rejected: [],
+      unresolved: [],
+      verdicts: [],
     };
     const payload = formatDebateReport(report as never);
-    expect(payload.content.indexOf("CONSENSUS")).toBeLessThan(payload.content.indexOf("DISAGREEMENT"));
+    expect(payload.content.indexOf("CONSENSUS")).toBeLessThan(
+      payload.content.indexOf("DISAGREEMENT"),
+    );
     expect(payload.content).toContain("UNSUPPORTED");
     expect(payload.content).toContain("Model says rejected");
     expect(payload.content).toContain("Model says consensus");
-    expect(payload.content).toContain("Mechanically resolved evidence and provenance");
+    expect(payload.content).toContain(
+      "Mechanically resolved evidence and provenance",
+    );
+  });
+
+  test("renders each verdict's evidence and provenance deterministically", () => {
+    const verdict = {
+      claimId: "claim-a",
+      classification: "CONSENSUS",
+      support: "VERIFIED",
+      finalStances: [],
+      counts: { accept: 2, dispute: 0, uncertain: 0 },
+      evidence: [
+        {
+          id: "evidence-b",
+          status: "VERIFIED",
+          trackedPath: "src/b.ts",
+          origins: [],
+        },
+        {
+          id: "evidence-a",
+          status: "MISSING",
+          trackedPath: "src/a.ts",
+          origins: [],
+        },
+      ],
+      provenance: [
+        { agentId: "codex", agentRunId: "run-2", providerLocalId: "local-b" },
+        { agentId: "claude", agentRunId: "run-1", providerLocalId: "local-a" },
+      ],
+    };
+    const payload = formatDebateReport({
+      sessionId: "session-provenance",
+      status: "completed",
+      classification: "DEBATE",
+      projectId: "demo",
+      rounds: [],
+      analyses: [],
+      board: { version: 1, claims: [], evidence: [] },
+      verdicts: [verdict],
+      consensus: [verdict],
+      disagreements: [],
+      rejected: [],
+      unresolved: [],
+    } as never);
+    expect(payload.content).toContain(
+      "claim-a evidence: evidence-a MISSING src/a.ts; evidence-b VERIFIED src/b.ts",
+    );
+    expect(payload.content).toContain(
+      "claim-a provenance: claude/run-1/local-a; codex/run-2/local-b",
+    );
   });
 
   test("uses an attachment when a report exceeds Discord's message limit", () => {
     const payload = formatAskReport({
-      sessionId: "session-3", status: "completed", project: { id: "demo", name: "Demo", root: "unused" },
-      results: [{ agentId: "codex", status: "completed", response: "x".repeat(2_000), durationMs: 1, diagnostics: [], modelExecution: { observedModelIds: [], verification: "unverified" } }],
+      sessionId: "session-3",
+      status: "completed",
+      project: { id: "demo", name: "Demo", root: "unused" },
+      results: [
+        {
+          agentId: "codex",
+          status: "completed",
+          response: "x".repeat(2_000),
+          durationMs: 1,
+          diagnostics: [],
+          modelExecution: {
+            requestedClass: "sol",
+            requestedCliModelId: "gpt-sol",
+            observedModelIds: ["gpt-sol"],
+            verification: "verified",
+          },
+        },
+      ],
     });
     expect(payload.content.length).toBeLessThanOrEqual(1_900);
     expect(payload.files).toHaveLength(1);

@@ -202,6 +202,18 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("DebateService", () => {
+  test("reconstructs a complete terminal report for a repeated interaction", async () => {
+    const harness = await createHarness();
+    const original = await harness.service.debate(
+      harness.input,
+      DEFAULT_CONFIG,
+    );
+    const replay = harness.service.persistedReport(harness.input.interactionId);
+
+    expect(replay).toEqual(original);
+    harness.database.close();
+  });
+
   test("exposes stable boundary error codes", () => {
     expect(
       new DebateServiceError("PROJECT_REQUIRED", "Select a project"),

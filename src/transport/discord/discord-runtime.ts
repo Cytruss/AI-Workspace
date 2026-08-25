@@ -7,8 +7,14 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import type { AppConfig } from "../../config/schema.js";
-import type { CommandHandlerDependencies, InteractionPort } from "./command-handler.js";
-import { createCommandHandler, createSlashCommands } from "./command-handler.js";
+import type {
+  CommandHandlerDependencies,
+  InteractionPort,
+} from "./command-handler.js";
+import {
+  createCommandHandler,
+  createSlashCommands,
+} from "./command-handler.js";
 
 function port(interaction: ChatInputCommandInteraction): InteractionPort {
   const guildId = interaction.guildId ?? undefined;
@@ -18,14 +24,24 @@ function port(interaction: ChatInputCommandInteraction): InteractionPort {
     ...(guildId === undefined ? {} : { guildId }),
     channelId: interaction.channelId,
     userId: interaction.user.id,
-    getString: (name, required) => interaction.options.getString(name, required) ?? undefined,
-    deferReply: async () => { await interaction.deferReply(); },
-    reply: async (content) => { await interaction.reply(content); },
-    editReply: async (content) => { await interaction.editReply(content); },
+    getString: (name, required) =>
+      interaction.options.getString(name, required) ?? undefined,
+    deferReply: async () => {
+      await interaction.deferReply();
+    },
+    reply: async (content) => {
+      await interaction.reply(content);
+    },
+    editReply: async (content) => {
+      await interaction.editReply(content);
+    },
   };
 }
 
-export interface DiscordRuntimeDependencies extends Omit<CommandHandlerDependencies, "config"> {
+export interface DiscordRuntimeDependencies extends Omit<
+  CommandHandlerDependencies,
+  "config"
+> {
   config: AppConfig;
   readEnvironment?: (name: string) => string | undefined;
 }
@@ -53,7 +69,9 @@ export class DiscordRuntime {
       if (interaction.isChatInputCommand()) void handler(port(interaction));
     });
     this.client.once(Events.ClientReady, () => undefined);
-    const readEnvironment = this.dependencies.readEnvironment ?? ((name: string) => process.env[name]);
+    const readEnvironment =
+      this.dependencies.readEnvironment ??
+      ((name: string) => process.env[name]);
     const registrationToken = readEnvironment(config.discord.tokenEnv);
     if (registrationToken === undefined || registrationToken.length === 0)
       throw new Error("Discord token is not configured");
@@ -62,7 +80,17 @@ export class DiscordRuntime {
       codex: config.agents.codex.models,
       claude: config.agents.claude.models,
     }).map((command) => command.toJSON());
-    await Promise.all(config.discord.guildIds.map((guildId) => rest.put(Routes.applicationGuildCommands(config.discord.applicationId, guildId), { body })));
+    await Promise.all(
+      config.discord.guildIds.map((guildId) =>
+        rest.put(
+          Routes.applicationGuildCommands(
+            config.discord.applicationId,
+            guildId,
+          ),
+          { body },
+        ),
+      ),
+    );
     const token = readEnvironment(config.discord.tokenEnv);
     if (token === undefined || token.length === 0)
       throw new Error("Discord token is not configured");

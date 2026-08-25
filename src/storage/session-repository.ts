@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { ProjectScope } from "./project-repository.js";
 import type { SqliteDatabase } from "./database.js";
 
 export type SessionStatus =
@@ -323,6 +324,15 @@ export class SessionRepository {
     const row = this.database
       .prepare("SELECT * FROM sessions WHERE interaction_id = ?")
       .get(interactionId) as SessionRow | undefined;
+    return row === undefined ? undefined : sessionFromRow(row);
+  }
+  latestForScope(scope: ProjectScope): SessionRecord | undefined {
+    const row = this.database
+      .prepare(
+        "SELECT * FROM sessions WHERE guild_id=? AND channel_id=? AND user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+      )
+      .get(scope.guildId, scope.channelId, scope.userId) as
+      SessionRow | undefined;
     return row === undefined ? undefined : sessionFromRow(row);
   }
   get(id: string): SessionRecord {

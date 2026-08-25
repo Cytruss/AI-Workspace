@@ -29,7 +29,9 @@ export function authorize(
   if (!config.guildIds.includes(scope.guildId))
     throw new DiscordAuthorizationError("This server is not authorized");
   if (!config.allowedUserIds.includes(scope.userId))
-    throw new DiscordAuthorizationError("You are not authorized to use this command");
+    throw new DiscordAuthorizationError(
+      "You are not authorized to use this command",
+    );
   return Object.freeze({
     guildId: scope.guildId,
     channelId: scope.channelId,

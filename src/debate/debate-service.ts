@@ -374,6 +374,99 @@ export class DebateService {
     });
   }
 
+  persistedReport(interactionId: string): DebateReport | undefined {
+    const session =
+      this.dependencies.sessions.findByInteractionId(interactionId);
+    if (
+      session === undefined ||
+      session.command !== "debate" ||
+      !["completed", "partial", "failed", "cancelled"].includes(session.status)
+    )
+      return undefined;
+    const persisted = this.dependencies.deliberation.load(session.id);
+    const finalRound = [...persisted.rounds]
+      .filter((round) => round.phase === "final")
+      .at(-1);
+    const boardRecord =
+      finalRound?.outputBoardId === undefined
+        ? persisted.boards.at(-1)
+        : persisted.boards.find(
+            (board) => board.id === finalRound.outputBoardId,
+          );
+    const evidenceByStance = new Map(
+      persisted.stanceEvidence.reduce<readonly [string, readonly string[]][]>(
+        (entries, link) => {
+          const current =
+            entries.find(([id]) => id === link.stanceId)?.[1] ?? [];
+          return [
+            ...entries.filter(([id]) => id !== link.stanceId),
+            [link.stanceId, [...current, link.canonicalEvidenceId]],
+          ];
+        },
+        [],
+      ),
+    );
+    const finalStances = persisted.stances
+      .filter((stance) => stance.roundId === finalRound?.id)
+      .map(
+        (stance) =>
+          ({
+            claimId: stance.canonicalClaimId,
+            value: stance.stance,
+            reasoning: stance.reasoning,
+            evidenceIds: evidenceByStance.get(stance.id) ?? [],
+            agentId: stance.agentId,
+            agentRunId: stance.agentRunId,
+            roundId: stance.roundId,
+          }) as StanceRecord,
+      );
+    const analyses = persisted.runs
+      .filter((run) => run.phase === "initial")
+      .sort((left, right) =>
+        left.agentId === right.agentId ? 0 : left.agentId === "codex" ? -1 : 1,
+      )
+      .map((run) => {
+        const content =
+          run.response !== null &&
+          typeof run.response === "object" &&
+          "content" in run.response &&
+          typeof run.response.content === "string"
+            ? run.response.content
+            : undefined;
+        return {
+          agentId: run.agentId,
+          runId: run.id,
+          status: run.status,
+          ...(content === undefined ? {} : { content }),
+        } as DebateReport["analyses"][number];
+      });
+    const rounds: DebateRoundSummary[] = persisted.rounds.map((round) => ({
+      id: round.id,
+      number: round.roundNumber,
+      phase: (round.phase === "cross_examination"
+        ? "cross-examination"
+        : round.phase) as DebateRoundSummary["phase"],
+      status: round.status === "running" ? "failed" : round.status,
+    }));
+    const status =
+      session.status === "completed" ||
+      session.status === "partial" ||
+      session.status === "failed" ||
+      session.status === "cancelled"
+        ? session.status
+        : "failed";
+    return this.report(
+      session.id,
+      session.projectId,
+      status,
+      boardRecord === undefined ? "DEBATE_NOT_ESTABLISHED" : "DEBATE",
+      rounds,
+      boardRecord?.payload as ClaimBoard | undefined,
+      finalStances,
+      analyses,
+    );
+  }
+
   async debate(
     input: DebateInput,
     config: DebateConfig,

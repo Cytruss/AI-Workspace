@@ -1,7 +1,11 @@
 import type { AgentResult } from "../../agents/types.js";
 import type { DebateReport } from "../../debate/types.js";
 import type { AskReport } from "../../orchestrator/types.js";
-import type { AgentRunRecord } from "../../storage/session-repository.js";
+import type {
+  AgentRunRecord,
+  SessionRecord,
+} from "../../storage/session-repository.js";
+import type { RegisteredProject } from "../../projects/project-service.js";
 
 export interface DiscordAttachment {
   attachment: Buffer;
@@ -13,7 +17,15 @@ export interface DiscordPayload {
   files?: readonly DiscordAttachment[];
 }
 
-type ProviderModels = Readonly<Record<"codex" | "claude", { defaultModel?: string | undefined; selections: readonly ({ class: string } & Record<string, unknown>)[] }>>;
+type ProviderModels = Readonly<
+  Record<
+    "codex" | "claude",
+    {
+      defaultModel?: string | undefined;
+      selections: readonly ({ class: string } & Record<string, unknown>)[];
+    }
+  >
+>;
 
 const LIMIT = 1_900;
 
@@ -45,8 +57,12 @@ function modelLines(result: AgentResult): string[] {
 }
 
 function safeFailure(result: AgentResult): string | undefined {
-  if (result.status === "completed") return undefined;
-  return "Safe diagnostics: provider execution did not complete; inspect persisted session diagnostics.";
+  if (
+    result.status === "completed" &&
+    result.modelExecution.verification === "verified"
+  )
+    return undefined;
+  return "Safe diagnostics: provider execution did not complete verification; inspect persisted session diagnostics.";
 }
 
 export function formatModels(models: ProviderModels): DiscordPayload {
@@ -58,7 +74,9 @@ export function formatModels(models: ProviderModels): DiscordPayload {
       .map((selection) =>
         selection.class === settings.defaultModel
           ? `${selection.class} (default)`
-          : selection.class,
+          : settings.defaultModel === undefined
+            ? `${selection.class} (provider default by omission)`
+            : selection.class,
       )
       .join(", ")}`;
   };
@@ -81,18 +99,57 @@ export function formatAskReport(report: AskReport): DiscordPayload {
     `Status: ${report.status}`,
   ];
   for (const result of report.results) {
-    lines.push("", `## ${agentName(result.agentId)}`, `Status: ${result.status}`);
+    lines.push(
+      "",
+      `## ${agentName(result.agentId)}`,
+      `Status: ${result.status}`,
+    );
     lines.push(...modelLines(result));
     if (result.modelExecution.verification !== "verified")
       lines.push("Verification marker: unverified");
     const diagnostic = safeFailure(result);
     if (diagnostic !== undefined) lines.push(diagnostic);
-    if (result.response !== undefined) lines.push("", result.response);
+    if (
+      result.response !== undefined &&
+      result.modelExecution.verification === "verified"
+    )
+      lines.push("", result.response);
   }
   return payload(lines.join("\n"), `ask-${report.sessionId}.txt`);
 }
 
-function verdictLines(label: string, verdicts: DebateReport["verdicts"]): string[] {
+export function formatStatusReport(
+  session: SessionRecord,
+  project: RegisteredProject,
+  runs: readonly AgentRunRecord[],
+): DiscordPayload {
+  const lines = [
+    `Project: ${project.id}`,
+    `Session: ${session.id}`,
+    `Status: ${session.status}`,
+  ];
+  for (const run of runs) {
+    const result = {
+      agentId: run.agentId,
+      status: run.status === "running" ? "failed" : run.status,
+      durationMs: run.durationMs,
+      diagnostics: [],
+      modelExecution: run.modelExecution,
+    } as AgentResult;
+    lines.push("", `## ${agentName(run.agentId)}`, `Status: ${run.status}`);
+    lines.push(...modelLines(result));
+    if (run.modelExecution.verification !== "verified")
+      lines.push("Verification marker: unverified");
+    const diagnostic = safeFailure(result);
+    if (diagnostic !== undefined) lines.push(diagnostic);
+  }
+  return payload(lines.join("\n"), `status-${session.id}.txt`);
+}
+
+function verdictLines(
+  label: string,
+  verdicts: DebateReport["verdicts"],
+): string[] {
   const lines = [`## ${label}`];
   if (verdicts.length === 0) return [...lines, "None"];
   for (const verdict of verdicts) {
@@ -111,7 +168,9 @@ export function formatDebateReport(
   runs: readonly AgentRunRecord[] = [],
 ): DiscordPayload {
   const frozen = (["codex", "claude"] as const).map((agentId) => {
-    const execution = runs.find((run) => run.agentId === agentId)?.modelExecution;
+    const execution = runs.find(
+      (run) => run.agentId === agentId,
+    )?.modelExecution;
     return `${agentName(agentId)}: ${execution?.requestedClass ?? "provider default"}`;
   });
   const lines = [
@@ -131,14 +190,50 @@ export function formatDebateReport(
     ...verdictLines("UNRESOLVED", report.unresolved),
     "",
     "## Independent agent analyses",
-    ...report.analyses.map((analysis) =>
-      `${agentName(analysis.agentId)} (${analysis.status}): ${analysis.content ?? "No content"}`,
-    ),
+    ...report.analyses.map((analysis) => {
+      const verification = runs.find((run) => run.id === analysis.runId)
+        ?.modelExecution.verification;
+      return `${agentName(analysis.agentId)} (${analysis.status}): ${
+        verification === undefined || verification === "verified"
+          ? (analysis.content ?? "No content")
+          : "Content withheld because model verification is unverified"
+      }`;
+    }),
     "",
     "## Mechanically resolved evidence and provenance",
-    ...(report.board?.evidence.map(
-      (evidence) => `${evidence.id}: ${evidence.status}`,
-    ) ?? ["No evidence board available"]),
+    ...[...report.verdicts]
+      .sort((left, right) =>
+        String(left.claimId).localeCompare(String(right.claimId)),
+      )
+      .flatMap((verdict) => {
+        const claimId = String(verdict.claimId);
+        const evidence =
+          [...verdict.evidence]
+            .sort((left, right) =>
+              String(left.id).localeCompare(String(right.id)),
+            )
+            .map(
+              (item) => `${String(item.id)} ${item.status} ${item.trackedPath}`,
+            )
+            .join("; ") || "none";
+        const provenance =
+          [...verdict.provenance]
+            .sort(
+              (left, right) =>
+                left.agentId.localeCompare(right.agentId) ||
+                left.agentRunId.localeCompare(right.agentRunId) ||
+                left.providerLocalId.localeCompare(right.providerLocalId),
+            )
+            .map(
+              (item) =>
+                `${item.agentId}/${item.agentRunId}/${item.providerLocalId}`,
+            )
+            .join("; ") || "none";
+        return [
+          `${claimId} evidence: ${evidence}`,
+          `${claimId} provenance: ${provenance}`,
+        ];
+      }),
   ];
   return payload(lines.join("\n"), `debate-${report.sessionId}.txt`);
 }
