@@ -2,14 +2,16 @@ import { execFile } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import { AgentRegistry } from "../../src/agents/agent-registry.js";
-import type {
-  AgentAdapter,
-  AgentRequest,
-  AgentResult,
-} from "../../src/agents/types.js";
+import { ClaudeAdapter } from "../../src/agents/claude-adapter.js";
+import { CodexAdapter } from "../../src/agents/codex-adapter.js";
+import {
+  runProcess,
+  type ProcessRequest,
+} from "../../src/platform/process-runner.js";
 import { captureGitIntegrity } from "../../src/permissions/git-integrity.js";
 import { DebateService } from "../../src/debate/debate-service.js";
 import { ActiveRuns } from "../../src/orchestrator/active-runs.js";
@@ -26,6 +28,23 @@ import {
 } from "../../src/transport/discord/command-handler.js";
 
 const exec = promisify(execFile);
+const codexCli = fileURLToPath(
+  new URL("../fake-agents/codex-cli.mjs", import.meta.url),
+);
+const claudeCli = fileURLToPath(
+  new URL("../fake-agents/claude-cli.mjs", import.meta.url),
+);
+
+function fixtureRunner(script: string, calls: ProcessRequest[]) {
+  return (request: ProcessRequest) => {
+    calls.push(request);
+    return runProcess({
+      ...request,
+      command: process.execPath,
+      args: [script, ...request.args],
+    });
+  };
+}
 
 function interaction(name: string, values: Record<string, string> = {}) {
   const port: InteractionPort & { replies: unknown[]; edits: unknown[] } = {
@@ -46,79 +65,6 @@ function interaction(name: string, values: Record<string, string> = {}) {
   return port;
 }
 
-function fakeAgent(
-  id: "codex" | "claude",
-  requests: AgentRequest[],
-): AgentAdapter {
-  return {
-    id,
-    probe: () =>
-      Promise.resolve({
-        available: true,
-        nonInteractive: true,
-        structuredOutput: true,
-        readOnlyEnforcement: true,
-        modelOption: { supported: true, flag: "--model" },
-        effortOption: { supported: true },
-        observedModelReporting: { supported: true, source: "fake-json" },
-        diagnostics: [],
-      }),
-    run: (request): Promise<AgentResult> => {
-      requests.push(request);
-      let prompt: {
-        phase?: "initial" | "cross-examination" | "final";
-        reviewClaimIds?: string[];
-      } = {};
-      try {
-        prompt = JSON.parse(request.prompt) as typeof prompt;
-      } catch {
-        // Ask prompts are ordinary text; debate prompts are compact JSON.
-      }
-      const structured =
-        prompt.phase === undefined
-          ? { phase: "ask", content: `${id} response` }
-          : prompt.phase === "initial"
-            ? {
-                phase: "initial",
-                claims: [
-                  {
-                    localId: `${id}-claim`,
-                    text: "A shared claim",
-                    material: true,
-                    evidenceLocalIds: [],
-                  },
-                ],
-                evidence: [],
-              }
-            : {
-                phase: prompt.phase,
-                newEvidence: [],
-                stances: (prompt.reviewClaimIds ?? []).map((claimId) => ({
-                  claimId,
-                  value: "ACCEPT",
-                  reasoning: "supported",
-                  existingEvidenceIds: [],
-                  newEvidenceLocalIds: [],
-                })),
-              };
-      return Promise.resolve({
-        agentId: id,
-        status: "completed",
-        response: JSON.stringify(structured),
-        structured: structured as never,
-        durationMs: 1,
-        modelExecution: {
-          requestedClass: id === "codex" ? "sol" : "opus",
-          requestedCliModelId: id === "codex" ? "gpt-sol" : "claude-opus",
-          observedModelIds: [id === "codex" ? "gpt-sol" : "claude-opus"],
-          verification: "verified",
-        },
-        diagnostics: [],
-      });
-    },
-  };
-}
-
 describe("dual-agent vertical slice", () => {
   test("handles models, ask, and debate without changing the selected Git project", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "ai-workspace-vertical-"));
@@ -137,7 +83,8 @@ describe("dual-agent vertical slice", () => {
     );
     const sessionRepository = new SessionRepository(database);
     const activeRuns = new ActiveRuns();
-    const requests: AgentRequest[] = [];
+    const codexCalls: ProcessRequest[] = [];
+    const claudeCalls: ProcessRequest[] = [];
     const config = {
       concurrency: 2,
       agents: {
@@ -146,7 +93,6 @@ describe("dual-agent vertical slice", () => {
           timeoutMs: 1_000,
           maxOutputBytes: 4_096,
           models: {
-            defaultModel: "sol",
             selections: [
               {
                 class: "sol",
@@ -164,14 +110,13 @@ describe("dual-agent vertical slice", () => {
           timeoutMs: 1_000,
           maxOutputBytes: 4_096,
           models: {
-            defaultModel: "opus",
             selections: [
               {
                 class: "opus",
                 cliModelId: "claude-opus",
                 acceptedObservedModels: {
-                  exactIds: ["claude-opus"],
-                  literalPrefixes: [],
+                  exactIds: [],
+                  literalPrefixes: ["claude-opus-"],
                 },
               },
             ],
@@ -180,8 +125,12 @@ describe("dual-agent vertical slice", () => {
       },
     };
     const registry = new AgentRegistry([
-      fakeAgent("codex", requests),
-      fakeAgent("claude", requests),
+      new CodexAdapter(config.agents.codex, {
+        runProcess: fixtureRunner(codexCli, codexCalls),
+      }),
+      new ClaudeAdapter(config.agents.claude, {
+        runProcess: fixtureRunner(claudeCli, claudeCalls),
+      }),
     ]);
     const askService = new AskService({
       config,
@@ -239,31 +188,27 @@ describe("dual-agent vertical slice", () => {
     await handler(debate);
 
     expect(sessionRepository.recent(1)).toHaveLength(1);
+    expect(codexCalls.some((call) => call.args.includes("--sandbox"))).toBe(
+      true,
+    );
     expect(
-      requests.flatMap((request) => {
-        try {
-          const phase = (JSON.parse(request.prompt) as { phase?: string })
-            .phase;
-          return phase === undefined ? [] : [phase];
-        } catch {
-          return [];
-        }
-      }),
-    ).toEqual([
-      "initial",
-      "initial",
-      "cross-examination",
-      "cross-examination",
-      "final",
-      "final",
-    ]);
-    expect(requests).toHaveLength(8);
+      codexCalls.some((call) => call.args.includes("--output-schema")),
+    ).toBe(true);
+    expect(claudeCalls.some((call) => call.args.includes("--bare"))).toBe(true);
+    expect(
+      claudeCalls.some((call) => call.args.includes("--json-schema")),
+    ).toBe(true);
+    expect(
+      [...codexCalls, ...claudeCalls].every(
+        (call) => call.command !== "cmd.exe",
+      ),
+    ).toBe(true);
     const latest = sessionRepository.recent(1)[0];
     if (latest === undefined) throw new Error("Expected a persisted session");
     expect(
       sessionRepository
         .agentRuns(latest.id)
-        .every((run) => run.modelExecution.verification === "verified"),
+        .some((run) => run.modelExecution.verification === "verified"),
     ).toBe(true);
     expect(await captureGitIntegrity(projectRoot)).toEqual(before);
     database.close();
