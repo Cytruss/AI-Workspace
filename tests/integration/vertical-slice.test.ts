@@ -251,7 +251,6 @@ describe("dual-agent vertical slice", () => {
       const ask = interaction("ask", {
         agent: "both",
         question: "Summarize",
-        codex_model: "sol",
         claude_model: "opus",
       });
       await harness.handler(ask);
@@ -263,7 +262,6 @@ describe("dual-agent vertical slice", () => {
       const debate = interaction("debate", {
         topic: "vertical-exhaustive",
         project: "demo",
-        codex_model: "sol",
         claude_model: "opus",
       });
       debate.interactionId = "vertical-exhaustive";
@@ -407,9 +405,6 @@ describe("dual-agent vertical slice", () => {
         new Set(codexRuns.map((run) => canonicalJson(run.modelExecution))).size,
       ).toBe(1);
       expect(codexRuns[0]?.modelExecution).toEqual({
-        requestedClass: "sol",
-        requestedCliModelId: "gpt-sol",
-        requestedEffort: "high",
         observedModelIds: [],
         verification: "unverified",
       });
@@ -450,15 +445,10 @@ describe("dual-agent vertical slice", () => {
       }
       for (const call of inferenceCalls(harness.codexCalls)) {
         expect(call.args).toEqual(
-          expect.arrayContaining([
-            "--sandbox",
-            "read-only",
-            "--model",
-            "gpt-sol",
-            "--config",
-            'model_reasoning_effort="high"',
-          ]),
+          expect.arrayContaining(["--sandbox", "read-only"]),
         );
+        expect(call.args).not.toContain("--model");
+        expect(call.args).not.toContain("--config");
         expect(call.command).not.toBe("cmd.exe");
       }
       for (const call of inferenceCalls(harness.claudeCalls)) {
@@ -541,11 +531,7 @@ describe("dual-agent vertical slice", () => {
       const adapters = [
         {
           adapter: harness.codexAdapter,
-          selection: {
-            class: "sol",
-            cliModelId: "gpt-sol",
-            requestedEffort: "high",
-          },
+          selection: undefined,
         },
         {
           adapter: harness.claudeAdapter,
@@ -570,7 +556,7 @@ describe("dual-agent vertical slice", () => {
               timeoutMs: 2_000,
               maxOutputBytes: 16_384,
               responseSchema: InitialPhaseResponseSchema,
-              modelSelection: selection,
+              ...(selection === undefined ? {} : { modelSelection: selection }),
             },
             new AbortController().signal,
           );
@@ -597,7 +583,7 @@ describe("dual-agent vertical slice", () => {
               ["claim-0001"],
               [],
             ),
-            modelSelection: selection,
+            ...(selection === undefined ? {} : { modelSelection: selection }),
           },
           new AbortController().signal,
         );
@@ -751,6 +737,27 @@ describe("dual-agent vertical slice", () => {
     }
   });
 
+  test("explicit Codex selection fails after probes without starting inference", async () => {
+    const harness = await createHarness();
+    try {
+      const ask = interaction("ask", {
+        agent: "codex",
+        question: "must not execute",
+        codex_model: "sol",
+      });
+      await harness.handler(ask);
+      expect(rendered(ask)).toContain("cannot be used");
+      expect(inferenceCalls(harness.codexCalls)).toHaveLength(0);
+      expect(harness.codexCalls.map((call) => call.args)).toEqual([
+        ["--version"],
+        ["exec", "--help"],
+      ]);
+      expect(harness.sessions.recent(1)).toHaveLength(0);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   test("DebateConfig rejects every bound and stops an oversized board before later phases", async () => {
     const valid = {
       maxRounds: 1,
@@ -776,7 +783,6 @@ describe("dual-agent vertical slice", () => {
             scope: { guildId: "guild", channelId: "channel", userId: "user" },
             interactionId: "bounded-board",
             projectId: "demo",
-            codexModel: "sol",
             claudeModel: "opus",
             topic: "vertical-exhaustive",
           },
@@ -810,11 +816,6 @@ describe("dual-agent vertical slice", () => {
           timeoutMs: 2_000,
           maxOutputBytes: 16_384,
           responseSchema: InitialPhaseResponseSchema,
-          modelSelection: {
-            class: "sol",
-            cliModelId: "gpt-sol",
-            requestedEffort: "high",
-          },
         },
         cancellation.signal,
       );

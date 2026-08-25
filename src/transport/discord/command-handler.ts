@@ -129,7 +129,11 @@ function knownError(error: unknown): string {
   if (code === "PROJECT_NOT_FOUND") return "That project is not registered.";
   if (code === "INTERACTION_IN_PROGRESS")
     return "This interaction is already in progress.";
-  if (code === "AGENT_MODEL_UNSUPPORTED" || code === "AGENT_EFFORT_UNSUPPORTED")
+  if (
+    code === "AGENT_MODEL_UNSUPPORTED" ||
+    code === "AGENT_MODEL_OBSERVATION_UNSUPPORTED" ||
+    code === "AGENT_EFFORT_UNSUPPORTED"
+  )
     return "That configured model selection cannot be used by this provider.";
   if (code === "AGENT_UNAVAILABLE")
     return "The selected agent is currently unavailable.";

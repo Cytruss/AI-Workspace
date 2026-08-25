@@ -36,7 +36,7 @@ const capability: AgentCapabilities = {
   readOnlyEnforcement: true,
   modelOption: { supported: true },
   effortOption: { supported: true, allowedValues: ["high"] },
-  observedModelReporting: { supported: false },
+  observedModelReporting: { supported: true },
   diagnostics: [],
 };
 

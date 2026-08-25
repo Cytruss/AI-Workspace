@@ -30,7 +30,7 @@ export function capabilitySatisfiesConfiguredSelections(
     !capability.structuredOutput ||
     !capability.readOnlyEnforcement ||
     !capability.modelOption.supported ||
-    !capability.observedModelReporting.supported
+    (selections.length > 0 && !capability.observedModelReporting.supported)
   )
     return false;
   try {

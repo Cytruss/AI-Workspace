@@ -16,11 +16,34 @@ import { SessionRepository } from "../storage/session-repository.js";
 import { DiscordRuntime } from "../transport/discord/discord-runtime.js";
 import { resolveAgentCommand } from "./resolve-agent-command.js";
 
-async function waitForRuns(activeRuns: ActiveRuns): Promise<void> {
+async function waitForRuns(
+  activeRuns: Pick<ActiveRuns, "list">,
+): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (activeRuns.list().length > 0 && Date.now() < deadline) {
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
+}
+
+interface ShutdownDependencies {
+  runtime: Pick<DiscordRuntime, "stopAcceptingInteractions" | "stop">;
+  activeRuns: Pick<ActiveRuns, "cancelAll" | "list">;
+  closeDatabase: () => void;
+  exit?: (code: number) => void;
+}
+
+export function createShutdownHandler(dependencies: ShutdownDependencies) {
+  let stopping = false;
+  return async (exitProcess = false): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
+    dependencies.runtime.stopAcceptingInteractions();
+    dependencies.activeRuns.cancelAll();
+    await waitForRuns(dependencies.activeRuns);
+    dependencies.runtime.stop();
+    dependencies.closeDatabase();
+    if (exitProcess) (dependencies.exit ?? process.exit)(0);
+  };
 }
 
 export async function startApplication(): Promise<void> {
@@ -78,18 +101,13 @@ export async function startApplication(): Promise<void> {
     activeRuns,
     sessions,
   });
-  let stopping = false;
-  const stop = async () => {
-    if (stopping) return;
-    stopping = true;
-    runtime.stopAcceptingInteractions();
-    activeRuns.cancelAll();
-    await waitForRuns(activeRuns);
-    runtime.stop();
-    database.close();
-  };
-  process.once("SIGINT", () => void stop());
-  process.once("SIGTERM", () => void stop());
+  const stop = createShutdownHandler({
+    runtime,
+    activeRuns,
+    closeDatabase: () => database.close(),
+  });
+  process.once("SIGINT", () => void stop(true));
+  process.once("SIGTERM", () => void stop(true));
   try {
     await runtime.start();
   } catch (error) {

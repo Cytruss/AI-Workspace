@@ -15,6 +15,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const configuration = await loadConfig(paths.configFile);
   const healthy = await runDoctor({
     config: configuration,
+    configFile: paths.configFile,
     databaseFile: paths.databaseFile,
   });
   if (!healthy) process.exitCode = 1;

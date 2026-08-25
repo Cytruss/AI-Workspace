@@ -31,6 +31,15 @@ describe("doctor capability gate", () => {
     ).toBe(false);
   });
 
+  test("allows provider-default omission without observation reporting", () => {
+    expect(
+      capabilitySatisfiesConfiguredSelections(
+        { ...available, observedModelReporting: { supported: false } },
+        [],
+      ),
+    ).toBe(true);
+  });
+
   test("rejects a configured effort outside the safe allowed-values list", () => {
     expect(
       capabilitySatisfiesConfiguredSelections(available, [

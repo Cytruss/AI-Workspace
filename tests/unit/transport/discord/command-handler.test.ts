@@ -84,14 +84,12 @@ describe("Discord command handler", () => {
   });
 
   test("asks a selected agent after immediate defer and passes concrete classes", async () => {
-    const ask = vi
-      .fn()
-      .mockResolvedValue({
-        sessionId: "s",
-        status: "completed",
-        project: { id: "demo", name: "Demo", root: "x" },
-        results: [],
-      });
+    const ask = vi.fn().mockResolvedValue({
+      sessionId: "s",
+      status: "completed",
+      project: { id: "demo", name: "Demo", root: "x" },
+      results: [],
+    });
     const handler = createCommandHandler({
       config,
       projects: {

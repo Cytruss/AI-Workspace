@@ -113,7 +113,7 @@ async function createHarness(options: HarnessOptions = {}) {
         readOnlyEnforcement: true,
         modelOption: { supported: true },
         effortOption: { supported: true },
-        observedModelReporting: { supported: false },
+        observedModelReporting: { supported: true },
         diagnostics: [],
       }),
     run: (request) => {
