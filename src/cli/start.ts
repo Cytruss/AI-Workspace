@@ -82,6 +82,7 @@ export async function startApplication(): Promise<void> {
   const stop = async () => {
     if (stopping) return;
     stopping = true;
+    runtime.stopAcceptingInteractions();
     activeRuns.cancelAll();
     await waitForRuns(activeRuns);
     runtime.stop();

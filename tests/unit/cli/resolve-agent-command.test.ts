@@ -168,4 +168,67 @@ describe("resolveAgentCommand", () => {
     expect(resolution).not.toHaveProperty("command");
     expect(resolution.diagnostic).toContain(".cmd");
   });
+
+  test("rejects a directory, a nonexecutable Unix file, and a failed native probe", async () => {
+    const directory = join(tmpdir(), `ai-workspace-file-${String(Date.now())}`);
+    await mkdir(directory, { recursive: true });
+    const nonexecutable = join(directory, "claude");
+    await writeFile(nonexecutable, "native", { mode: 0o644 });
+    await expect(
+      resolveAgentCommand({
+        provider: "claude",
+        configuredCommand: directory,
+        platform: "win32",
+        env: {},
+      }),
+    ).resolves.toMatchObject({ source: "unresolved" });
+    await expect(
+      resolveAgentCommand({
+        provider: "claude",
+        configuredCommand: nonexecutable,
+        platform: "linux",
+        env: {},
+      }),
+    ).resolves.toMatchObject({ source: "unresolved" });
+    await expect(
+      resolveAgentCommand({
+        provider: "claude",
+        configuredCommand: "claude",
+        platform: "win32",
+        env: { PATH: directory },
+        inspectNativeFile: () => Promise.resolve(true),
+        runProcess: () =>
+          Promise.resolve({
+            exitCode: 1,
+            signal: null,
+            stdout: "",
+            stderr: "failed",
+            durationMs: 1,
+            termination: "exit",
+          }),
+      }),
+    ).resolves.toMatchObject({ source: "unresolved" });
+  });
+
+  test("never probes a shim or mutates PATH when a shim target is missing", async () => {
+    const appData = join(tmpdir(), `ai-workspace-shim-${String(Date.now())}`);
+    const npm = join(appData, "npm");
+    await mkdir(npm, { recursive: true });
+    const shim = join(npm, "claude.cmd");
+    await writeFile(shim, "x".repeat(160));
+    const env = { APPDATA: appData, PATH: npm };
+    const requests: ProcessRequest[] = [];
+
+    const resolution = await resolveAgentCommand({
+      provider: "claude",
+      configuredCommand: "claude",
+      platform: "win32",
+      env,
+      runProcess: successfulProbe(requests),
+    });
+
+    expect(resolution).toMatchObject({ source: "unresolved" });
+    expect(requests).toHaveLength(0);
+    expect(env.PATH).toBe(npm);
+  });
 });

@@ -1,4 +1,8 @@
-import { access } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { promisify } from "node:util";
+import type { AgentCapabilities } from "../agents/types.js";
+import { validateModelCapabilities } from "../agents/agent-registry.js";
 import { AppConfigSchema, type AppConfig } from "../config/schema.js";
 import { CodexAdapter } from "../agents/codex-adapter.js";
 import { ClaudeAdapter } from "../agents/claude-adapter.js";
@@ -10,12 +14,49 @@ import { resolveAgentCommand } from "./resolve-agent-command.js";
 export interface DoctorOptions {
   config: AppConfig;
   databaseFile: string;
+  configFile?: string;
   write?: (line: string) => void;
+}
+
+const executeFile = promisify(execFile);
+
+export function capabilitySatisfiesConfiguredSelections(
+  capability: AgentCapabilities,
+  selections: AppConfig["agents"]["codex"]["models"]["selections"],
+): boolean {
+  if (
+    !capability.available ||
+    !capability.nonInteractive ||
+    !capability.structuredOutput ||
+    !capability.readOnlyEnforcement ||
+    !capability.modelOption.supported ||
+    !capability.observedModelReporting.supported
+  )
+    return false;
+  try {
+    for (const selection of selections) {
+      validateModelCapabilities(capability, {
+        class: selection.class,
+        cliModelId: selection.cliModelId,
+        ...(selection.requestedEffort === undefined
+          ? {}
+          : { requestedEffort: selection.requestedEffort }),
+      });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function redactPath(value: string): string {
+  const home = homedir();
+  return value.startsWith(home) ? `~${value.slice(home.length)}` : value;
 }
 
 function reportCapability(
   provider: "codex" | "claude",
-  capability: Awaited<ReturnType<CodexAdapter["probe"]>>,
+  capability: AgentCapabilities,
   write: (line: string) => void,
 ): void {
   write(
@@ -32,10 +73,17 @@ export async function runDoctor(options: DoctorOptions): Promise<boolean> {
   let healthy = true;
   write(`OS: ${process.platform}`);
   write(`Node: ${process.version}`);
+  write(
+    `Config: ${options.configFile === undefined ? "configured path unavailable" : redactPath(options.configFile)}`,
+  );
   try {
-    await access(options.databaseFile);
-  } catch {
-    // SQLite creates the database only after its parent directory exists.
+    const { stdout } = await executeFile("git", ["--version"]);
+    write(`Git: ${stdout.trim()}`);
+  } catch (error) {
+    healthy = false;
+    write(
+      `Git: unavailable (${error instanceof Error ? error.message : "unknown error"})`,
+    );
   }
   try {
     const database = openDatabase(options.databaseFile);
@@ -49,14 +97,16 @@ export async function runDoctor(options: DoctorOptions): Promise<boolean> {
       `Database: unavailable (${error instanceof Error ? error.message : "unknown error"})`,
     );
   }
-  try {
-    await ProjectService.create(config.projects);
-    write("Projects: valid");
-  } catch (error) {
-    healthy = false;
-    write(
-      `Projects: invalid (${error instanceof Error ? error.message : "unknown error"})`,
-    );
+  for (const project of config.projects) {
+    try {
+      await ProjectService.create([project]);
+      write(`Project ${project.id}: valid`);
+    } catch (error) {
+      healthy = false;
+      write(
+        `Project ${project.id}: invalid (${error instanceof Error ? error.message : "unknown error"})`,
+      );
+    }
   }
   for (const provider of ["codex", "claude"] as const) {
     const resolution = await resolveAgentCommand({
@@ -82,7 +132,17 @@ export async function runDoctor(options: DoctorOptions): Promise<boolean> {
           });
     const capability = await adapter.probe();
     reportCapability(provider, capability, write);
-    healthy &&= capability.available;
+    if (
+      !capabilitySatisfiesConfiguredSelections(
+        capability,
+        config.agents[provider].models.selections,
+      )
+    ) {
+      healthy = false;
+      write(
+        `${provider}: mandatory safety, model, effort, or observation contract is unavailable.`,
+      );
+    }
   }
   write(
     "Managed provider settings can outrank inline controls; fallback may incur cost before post-execution model-class rejection.",

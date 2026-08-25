@@ -48,6 +48,7 @@ export interface DiscordRuntimeDependencies extends Omit<
 
 export class DiscordRuntime {
   private readonly client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  private acceptingInteractions = true;
 
   constructor(private readonly dependencies: DiscordRuntimeDependencies) {}
 
@@ -66,7 +67,8 @@ export class DiscordRuntime {
       },
     });
     this.client.on(Events.InteractionCreate, (interaction) => {
-      if (interaction.isChatInputCommand()) void handler(port(interaction));
+      if (this.acceptingInteractions && interaction.isChatInputCommand())
+        void handler(port(interaction));
     });
     this.client.once(Events.ClientReady, () => undefined);
     const readEnvironment =
@@ -99,5 +101,9 @@ export class DiscordRuntime {
 
   stop(): void {
     void this.client.destroy();
+  }
+
+  stopAcceptingInteractions(): void {
+    this.acceptingInteractions = false;
   }
 }

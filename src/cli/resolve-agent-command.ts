@@ -127,14 +127,18 @@ function pathCandidates(
     );
 }
 
-function includesWindowsShim(
+async function includesWindowsShim(
   provider: AgentCommandProvider,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
-): boolean {
+): Promise<boolean> {
   if (platform !== "win32" || provider !== "claude" || !env.APPDATA)
     return false;
-  return true;
+  try {
+    return (await stat(win32.join(env.APPDATA, "npm", "claude.cmd"))).isFile();
+  } catch {
+    return false;
+  }
 }
 
 export async function resolveAgentCommand(
@@ -216,7 +220,7 @@ export async function resolveAgentCommand(
       return {
         command: candidate,
         source: "candidate",
-        diagnostic: includesWindowsShim(input.provider, platform, env)
+        diagnostic: (await includesWindowsShim(input.provider, platform, env))
           ? "A Windows npm shim is diagnostic-only; its documented native target was verified directly."
           : "Documented native executable was verified with --version.",
       };
@@ -226,7 +230,11 @@ export async function resolveAgentCommand(
     );
   }
 
-  const shimDiagnostic = includesWindowsShim(input.provider, platform, env)
+  const shimDiagnostic = (await includesWindowsShim(
+    input.provider,
+    platform,
+    env,
+  ))
     ? " A Windows npm shim is diagnostic-only; install or configure its native .exe target."
     : "";
   return {
