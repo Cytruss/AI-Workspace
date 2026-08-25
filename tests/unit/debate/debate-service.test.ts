@@ -2,17 +2,24 @@ import { execFile } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import { AgentRegistry } from "../../../src/agents/agent-registry.js";
+import { ClaudeAdapter } from "../../../src/agents/claude-adapter.js";
+import { CodexAdapter } from "../../../src/agents/codex-adapter.js";
 import type { ClaimBoard } from "../../../src/agents/structured-response.js";
 import type { AgentAdapter, AgentRequest } from "../../../src/agents/types.js";
-import type { DebateConfig } from "../../../src/config/schema.js";
+import type { AgentConfig, DebateConfig } from "../../../src/config/schema.js";
 import {
   DebateService,
   DebateServiceError,
 } from "../../../src/debate/debate-service.js";
 import { ActiveRuns } from "../../../src/orchestrator/active-runs.js";
+import {
+  runProcess,
+  type ProcessRequest,
+} from "../../../src/platform/process-runner.js";
 import { ProjectService } from "../../../src/projects/project-service.js";
 import { openDatabase } from "../../../src/storage/database.js";
 import { DeliberationRepository } from "../../../src/storage/deliberation-repository.js";
@@ -28,6 +35,13 @@ const DEFAULT_CONFIG: DebateConfig = {
   maxBoardClaims: 2,
   maxBoardBytes: 4096,
 };
+const snapshot = { porcelainV2: "", dirtyPathFingerprints: "[]" };
+const codexCli = fileURLToPath(
+  new URL("../../fake-agents/codex-cli.mjs", import.meta.url),
+);
+const claudeCli = fileURLToPath(
+  new URL("../../fake-agents/claude-cli.mjs", import.meta.url),
+);
 
 interface HarnessOptions {
   finalOutcome?: "completed" | "failed" | "cancelled";
@@ -44,6 +58,21 @@ interface DebatePrompt {
 
 function parsePrompt(request: AgentRequest): DebatePrompt {
   return JSON.parse(request.prompt) as DebatePrompt;
+}
+
+function fixtureRunner(
+  script: string,
+  afterResult?: (request: ProcessRequest) => void,
+) {
+  return async (request: ProcessRequest) => {
+    const result = await runProcess({
+      ...request,
+      command: process.execPath,
+      args: [script, ...request.args],
+    });
+    afterResult?.(request);
+    return result;
+  };
 }
 
 async function createHarness(options: HarnessOptions = {}) {
@@ -263,6 +292,101 @@ describe("DebateService", () => {
     expect(harness.activeRuns.list()).toEqual([]);
     harness.database.close();
   });
+
+  test("persists a completed real-provider final position before its peer aborts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "debate-service-real-"));
+    await promisify(execFile)("git", ["init", "--quiet", root]);
+    const activeRuns = new ActiveRuns();
+    const agentConfig: AgentConfig = {
+      command: "configured-provider",
+      timeoutMs: 2_000,
+      maxOutputBytes: 16_384,
+      models: { selections: [] },
+    };
+    const cancelAfterCodexFinal = (request: ProcessRequest) => {
+      if (request.stdin === undefined) return;
+      const prompt: unknown = JSON.parse(request.stdin);
+      if (
+        typeof prompt === "object" &&
+        prompt !== null &&
+        (prompt as { phase?: unknown }).phase === "final"
+      ) {
+        activeRuns.cancelAll();
+      }
+    };
+    const codex = new CodexAdapter(agentConfig, {
+      runProcess: fixtureRunner(codexCli, cancelAfterCodexFinal),
+      captureGitIntegrity: () => Promise.resolve(snapshot),
+    });
+    const claude = new ClaudeAdapter(agentConfig, {
+      runProcess: fixtureRunner(claudeCli),
+      captureGitIntegrity: () => Promise.resolve(snapshot),
+    });
+    const projects = await ProjectService.create([
+      { id: "real", name: "Real fake providers", root },
+    ]);
+    const database = openDatabase(":memory:");
+    migrateDatabase(database);
+    new ProjectRepository(database).upsert(projects.get("real"));
+    const sessions = new SessionRepository(database);
+    const deliberation = new DeliberationRepository(database);
+    const service = new DebateService({
+      config: {
+        concurrency: 2,
+        agents: { codex: agentConfig, claude: agentConfig },
+      },
+      registry: new AgentRegistry([codex, claude]),
+      projects,
+      sessions,
+      deliberation,
+      activeRuns,
+    });
+
+    const report = await service.debate(
+      {
+        scope: { guildId: "g", channelId: "c", userId: "u" },
+        interactionId: "mixed-real-final-cancellation",
+        projectId: "real",
+        topic: "mixed-final-cancellation",
+      },
+      DEFAULT_CONFIG,
+    );
+
+    expect(report).toMatchObject({
+      status: "cancelled",
+      classification: "DEBATE",
+    });
+    expect(report.rounds.at(-1)).toMatchObject({
+      phase: "final",
+      status: "cancelled",
+    });
+    expect(report.unresolved.map((verdict) => verdict.claimId)).toEqual([
+      "claim-0001",
+    ]);
+    expect(
+      Object.fromEntries(
+        sessions
+          .agentRuns(report.sessionId)
+          .filter((run) => run.phase === "final")
+          .map((run) => [run.agentId, run.status]),
+      ),
+    ).toEqual({ claude: "cancelled", codex: "completed" });
+    const persisted = deliberation.load(report.sessionId);
+    expect(persisted.finalPositions).toMatchObject([
+      {
+        agentId: "codex",
+        position: {
+          phase: "final",
+          stances: [{ claimId: "claim-0001", value: "ACCEPT" }],
+        },
+      },
+    ]);
+    expect(persisted.verdicts).toMatchObject([
+      { canonicalClaimId: "claim-0001", classification: "UNRESOLVED" },
+    ]);
+    expect(activeRuns.list()).toEqual([]);
+    database.close();
+  }, 15_000);
 
   test("enforces the effective claim bound before any later provider call", async () => {
     const harness = await createHarness({

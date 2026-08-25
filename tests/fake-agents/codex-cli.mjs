@@ -20,6 +20,12 @@ else if (args.includes("--help"))
 else if (stdin === "HANG") setInterval(() => undefined, 1_000);
 else if (stdin === "OVERSIZE") process.stdout.write("x".repeat(8_192));
 else {
+  let prompt = {};
+  try {
+    prompt = JSON.parse(stdin);
+  } catch {
+    // Adapter lifecycle tests intentionally send inert non-JSON prompts.
+  }
   const schema = await readFile(
     args[args.indexOf("--output-schema") + 1],
     "utf8",
@@ -31,8 +37,34 @@ else {
       : "initial";
   const response = JSON.stringify(
     phase === "initial"
-      ? { phase, claims: [], evidence: [] }
-      : { phase, stances: [], newEvidence: [] },
+      ? {
+          phase,
+          claims:
+            prompt.phase === "initial"
+              ? [
+                  {
+                    localId: "codex-claim",
+                    text: "A material claim",
+                    material: true,
+                    evidenceLocalIds: [],
+                  },
+                ]
+              : [],
+          evidence: [],
+        }
+      : {
+          phase,
+          stances: Array.isArray(prompt.reviewClaimIds)
+            ? prompt.reviewClaimIds.map((claimId) => ({
+                claimId,
+                value: "ACCEPT",
+                reasoning: "supported",
+                existingEvidenceIds: [],
+                newEvidenceLocalIds: [],
+              }))
+            : [],
+          newEvidence: [],
+        },
   );
   process.stdout.write(
     `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: response } })}\n${JSON.stringify({ type: "turn.completed" })}\n`,

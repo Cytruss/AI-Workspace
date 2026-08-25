@@ -18,16 +18,51 @@ else if (args.includes("--help"))
 else if (stdin === "HANG") setInterval(() => undefined, 1_000);
 else if (stdin === "OVERSIZE") process.stdout.write("x".repeat(8_192));
 else {
+  let prompt = {};
+  try {
+    prompt = JSON.parse(stdin);
+  } catch {
+    // Adapter lifecycle tests intentionally send inert non-JSON prompts.
+  }
   const schema = args[args.indexOf("--json-schema") + 1];
   const phase = schema.includes('"cross-examination"')
     ? "cross-examination"
     : schema.includes('"final"')
       ? "final"
       : "initial";
+  if (phase === "final" && prompt.topic === "mixed-final-cancellation") {
+    setInterval(() => undefined, 1_000);
+  }
   const result =
     phase === "initial"
-      ? { phase, claims: [], evidence: [] }
-      : { phase, stances: [], newEvidence: [] };
+      ? {
+          phase,
+          claims:
+            prompt.phase === "initial"
+              ? [
+                  {
+                    localId: "claude-claim",
+                    text: "A material claim",
+                    material: true,
+                    evidenceLocalIds: [],
+                  },
+                ]
+              : [],
+          evidence: [],
+        }
+      : {
+          phase,
+          stances: Array.isArray(prompt.reviewClaimIds)
+            ? prompt.reviewClaimIds.map((claimId) => ({
+                claimId,
+                value: "ACCEPT",
+                reasoning: "supported",
+                existingEvidenceIds: [],
+                newEvidenceLocalIds: [],
+              }))
+            : [],
+          newEvidence: [],
+        };
   const modelUsage =
     stdin === "NO_OBSERVATION"
       ? {}

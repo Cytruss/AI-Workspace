@@ -605,7 +605,7 @@ export class DeliberationRepository {
       const linked = this.database
         .prepare(
           `SELECT 1 FROM claim_boards b
-           JOIN debate_rounds d ON d.id=? AND d.session_id=b.session_id AND d.phase='final' AND d.status IN ('completed','partial') AND d.output_board_id=b.id AND d.finished_at IS NOT NULL
+           JOIN debate_rounds d ON d.id=? AND d.session_id=b.session_id AND d.phase='final' AND d.status IN ('completed','partial','cancelled') AND d.output_board_id=b.id AND d.finished_at IS NOT NULL
            JOIN agent_runs r ON r.id=? AND r.session_id=b.session_id AND r.round_id=d.id AND r.agent_id=? AND r.phase='final' AND r.status='completed' AND r.response_json IS NOT NULL AND r.finished_at IS NOT NULL AND r.output_board_id=b.id
            WHERE b.id=? AND b.session_id=?`,
         )
