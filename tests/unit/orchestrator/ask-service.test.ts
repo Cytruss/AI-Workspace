@@ -364,6 +364,31 @@ describe("AskService", () => {
     database.close();
   });
 
+  test("runs the available provider when the other provider fails preflight for /ask both", async () => {
+    const codex = adapter("codex", result("codex"));
+    const unavailable: AgentAdapter = {
+      id: "claude",
+      probe: () => Promise.resolve({ ...capability, available: false }),
+      run: () => Promise.reject(new Error("must not run unavailable provider")),
+    };
+    const { database, service, sessions } = await setup([codex, unavailable]);
+
+    const report = await service.ask(input);
+
+    expect(report.status).toBe("partial");
+    expect(report.results).toMatchObject([
+      { agentId: "codex", status: "completed", response: "codex answer" },
+      {
+        agentId: "claude",
+        status: "failed",
+        diagnostics: ["Agent unavailable: claude"],
+      },
+    ]);
+    expect(codex.runCount).toBe(1);
+    expect(sessions.agentRuns(report.sessionId)).toHaveLength(2);
+    database.close();
+  });
+
   test("reports failed when both selected agents fail", async () => {
     const codex = {
       ...result("codex"),

@@ -30,7 +30,10 @@ import { canonicalJson } from "../storage/session-repository.js";
 import { ActiveRuns } from "../orchestrator/active-runs.js";
 import { ConcurrencyGate } from "../orchestrator/concurrency-gate.js";
 import { appendPhaseEvidence, createInitialClaimBoard } from "./claim-board.js";
-import { buildDeliberationContext } from "./context-builder.js";
+import {
+  buildDeliberationContext,
+  carryStanceEvidence,
+} from "./context-builder.js";
 import type { DebateInput, DebateReport, DebateRoundSummary } from "./types.js";
 import { deriveVerdicts } from "./verdicts.js";
 
@@ -736,12 +739,10 @@ export class DebateService {
             })),
           ),
         );
-        const output = {
+        const outputWithoutStanceEvidence = {
           ...appended.board,
           version: inputSnapshot.board.version + 1,
         };
-        this.assertBoardBounds(config, output);
-        const outputRecord = this.persistBoard(session.id, output);
         const roundStatus = controller.signal.aborted
           ? "cancelled"
           : valid.length === 2
@@ -749,29 +750,9 @@ export class DebateService {
             : valid.length === 0
               ? "failed"
               : "partial";
-        this.dependencies.deliberation.finishRound(
-          round.id,
-          roundStatus,
-          outputRecord.id,
-        );
-        rounds.push({
-          id: round.id,
-          number: roundNumber + 1,
-          phase: "cross-examination",
-          status: roundStatus,
-        });
         const crossStances: StanceRecord[] = [];
         for (const item of valid)
           for (const stance of schema.parse(item.result.structured).stances) {
-            const record = this.dependencies.deliberation.addStance({
-              boardId: outputRecord.id,
-              canonicalClaimId: stance.claimId,
-              roundId: round.id,
-              agentRunId: item.id,
-              agentId: item.agent.adapter.id,
-              stance: stance.value,
-              reasoning: stance.reasoning,
-            });
             const evidenceIds = [
               ...stance.existingEvidenceIds,
               ...stance.newEvidenceLocalIds.map((localId) => {
@@ -786,12 +767,6 @@ export class DebateService {
                 return id;
               }),
             ];
-            for (const evidenceId of evidenceIds)
-              this.dependencies.deliberation.linkStanceEvidence({
-                stanceId: record.id,
-                boardId: outputRecord.id,
-                canonicalEvidenceId: evidenceId,
-              });
             crossStances.push({
               claimId: stance.claimId,
               value: stance.value,
@@ -802,6 +777,40 @@ export class DebateService {
               roundId: round.id,
             });
           }
+        const output = carryStanceEvidence(
+          outputWithoutStanceEvidence,
+          crossStances,
+        );
+        this.assertBoardBounds(config, output);
+        const outputRecord = this.persistBoard(session.id, output);
+        this.dependencies.deliberation.finishRound(
+          round.id,
+          roundStatus,
+          outputRecord.id,
+        );
+        rounds.push({
+          id: round.id,
+          number: roundNumber + 1,
+          phase: "cross-examination",
+          status: roundStatus,
+        });
+        for (const stance of crossStances) {
+          const record = this.dependencies.deliberation.addStance({
+            boardId: outputRecord.id,
+            canonicalClaimId: stance.claimId,
+            roundId: stance.roundId,
+            agentRunId: stance.agentRunId,
+            agentId: stance.agentId,
+            stance: stance.value,
+            reasoning: stance.reasoning,
+          });
+          for (const evidenceId of stance.evidenceIds)
+            this.dependencies.deliberation.linkStanceEvidence({
+              stanceId: record.id,
+              boardId: outputRecord.id,
+              canonicalEvidenceId: evidenceId,
+            });
+        }
         board = output;
         boardRecord = outputRecord;
         unresolved = board.claims

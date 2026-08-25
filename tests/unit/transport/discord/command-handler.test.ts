@@ -215,12 +215,28 @@ describe("Discord command handler", () => {
       debateService: { debate: vi.fn() },
       activeRuns,
       sessions: {
-        latestForScope: () =>
+        get: (id: string) =>
           ({
-            id: "persisted-session",
+            id,
             projectId: "demo",
-            status: "completed",
+            status: id === "owner-run" ? "running" : "completed",
+            guildId: "guild",
+            channelId: "channel",
+            userId: id === "other-run" ? "other" : "user",
           }) as never,
+        recentForScope: () =>
+          [
+            {
+              id: "persisted-session",
+              projectId: "demo",
+              status: "completed",
+            },
+            {
+              id: "older-session",
+              projectId: "demo",
+              status: "failed",
+            },
+          ] as never,
         agentRuns: () =>
           [
             {
@@ -241,10 +257,40 @@ describe("Discord command handler", () => {
     const stop = interaction("stop");
     await handler(stop);
     expect(JSON.stringify(status.replies)).toContain("persisted-session");
+    expect(JSON.stringify(status.replies)).toContain("owner-run");
+    expect(JSON.stringify(status.replies)).toContain("older-session");
+    expect(JSON.stringify(status.replies)).not.toContain("other-run");
     expect(JSON.stringify(status.replies)).toContain("## Codex");
     expect(JSON.stringify(status.replies)).toContain("Requested class: sol");
     expect(owner.signal.aborted).toBe(true);
     expect(other.signal.aborted).toBe(false);
+  });
+
+  test("contains Discord defer and delivery rejections at the transport boundary", async () => {
+    const ask = vi.fn();
+    const handler = createCommandHandler({
+      config,
+      projects: { list: () => [], get: vi.fn() },
+      projectRepository: {
+        getActive: () => ({ id: "demo", name: "Demo", root: "x" }),
+        setActive: vi.fn(),
+      },
+      askService: { ask },
+      debateService: { debate: vi.fn() },
+      activeRuns: new ActiveRuns(),
+      sessions: { agentRuns: () => [] },
+    });
+    const deferFailure = interaction("ask", {
+      agent: "codex",
+      question: "Question",
+    });
+    deferFailure.deferReply = () => Promise.reject(new Error("expired"));
+    await expect(handler(deferFailure)).resolves.toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
+
+    const deliveryFailure = interaction("models");
+    deliveryFailure.reply = () => Promise.reject(new Error("delivery failed"));
+    await expect(handler(deliveryFailure)).resolves.toBeUndefined();
   });
 
   test("returns a persisted terminal debate report without another provider call", async () => {

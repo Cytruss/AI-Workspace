@@ -15,7 +15,7 @@ import {
   formatAskReport,
   formatDebateReport,
   formatModels,
-  formatStatusReport,
+  formatStatusOverview,
   type DiscordPayload,
 } from "./response-format.js";
 
@@ -77,7 +77,11 @@ export interface CommandHandlerDependencies {
   activeRuns: ActiveRuns;
   sessions?: {
     agentRuns(sessionId: string): readonly AgentRunRecord[];
-    latestForScope?(scope: ProjectScope): SessionRecord | undefined;
+    get?(sessionId: string): SessionRecord;
+    recentForScope?(
+      scope: ProjectScope,
+      limit: number,
+    ): readonly SessionRecord[];
   };
 }
 
@@ -147,7 +151,7 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
     maxBoardClaims: 40,
     maxBoardBytes: 65_536,
   };
-  return async (port: InteractionPort): Promise<void> => {
+  const handle = async (port: InteractionPort): Promise<void> => {
     let authorized: ProjectScope;
     try {
       authorized = scope(port);
@@ -183,18 +187,46 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
         return;
       }
       if (port.commandName === "status") {
-        const session = dependencies.sessions?.latestForScope?.(authorized);
-        if (session === undefined) {
+        const recent =
+          dependencies.sessions?.recentForScope?.(authorized, 5) ?? [];
+        const active = dependencies.activeRuns
+          .list()
+          .filter((run) => run.ownerUserId === authorized.userId)
+          .flatMap((run) => {
+            try {
+              const session = dependencies.sessions?.get?.(run.runId);
+              return session !== undefined &&
+                session.guildId === authorized.guildId &&
+                session.channelId === authorized.channelId &&
+                session.userId === authorized.userId
+                ? [session]
+                : [];
+            } catch {
+              return [];
+            }
+          });
+        if (active.length === 0 && recent.length === 0) {
           await port.reply(
             message("No persisted sessions are available for this channel."),
           );
           return;
         }
         await port.reply(
-          formatStatusReport(
-            session,
-            dependencies.projects.get(session.projectId),
-            dependencies.sessions?.agentRuns(session.id) ?? [],
+          formatStatusOverview(
+            active.map((session) => ({
+              session,
+              project: dependencies.projects.get(session.projectId),
+              runs: dependencies.sessions?.agentRuns(session.id) ?? [],
+            })),
+            recent
+              .filter(
+                (session) => !active.some((item) => item.id === session.id),
+              )
+              .map((session) => ({
+                session,
+                project: dependencies.projects.get(session.projectId),
+                runs: dependencies.sessions?.agentRuns(session.id) ?? [],
+              })),
           ),
         );
         return;
@@ -290,6 +322,15 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
       const output = message(knownError(error));
       if (deferred) await port.editReply(output);
       else await port.reply(output);
+    }
+  };
+  return async (port: InteractionPort): Promise<void> => {
+    try {
+      await handle(port);
+    } catch {
+      // Discord may reject expired acknowledgement or delivery promises. The
+      // orchestration result is already persisted and remains available via
+      // /status, so transport failures must not become unhandled rejections.
     }
   };
 }

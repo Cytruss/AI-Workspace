@@ -49,6 +49,7 @@ interface HarnessOptions {
   initialClaimTexts?: Readonly<Record<"codex" | "claude", readonly string[]>>;
   topic?: string;
   initialContent?: Readonly<Record<"codex" | "claude", string>>;
+  crossAddsEvidence?: boolean;
 }
 
 interface DebatePrompt {
@@ -148,7 +149,15 @@ async function createHarness(options: HarnessOptions = {}) {
       return Promise.resolve(
         result(id, "completed", {
           phase: prompt.phase,
-          newEvidence: [],
+          newEvidence:
+            prompt.phase === "cross-examination" && options.crossAddsEvidence
+              ? [
+                  {
+                    localId: `${id}-cross-evidence`,
+                    trackedPath: `${id}-cross.ts`,
+                  },
+                ]
+              : [],
           stances: (prompt.reviewClaimIds ?? []).map((claimId) => ({
             claimId,
             value:
@@ -157,7 +166,10 @@ async function createHarness(options: HarnessOptions = {}) {
                 : "ACCEPT",
             reasoning: "supported",
             existingEvidenceIds: [],
-            newEvidenceLocalIds: [],
+            newEvidenceLocalIds:
+              prompt.phase === "cross-examination" && options.crossAddsEvidence
+                ? [`${id}-cross-evidence`]
+                : [],
           })),
         }),
       );
@@ -288,6 +300,24 @@ describe("DebateService", () => {
         ),
       ).toHaveLength(2);
     }
+    harness.database.close();
+  });
+
+  test("supplies cross-examination evidence with its claim in the final provider context", async () => {
+    const harness = await createHarness({ crossAddsEvidence: true });
+
+    await harness.service.debate(harness.input, {
+      ...DEFAULT_CONFIG,
+      maxBoardBytes: 16_384,
+    });
+
+    const finalPrompt = harness.requests
+      .map(parsePrompt)
+      .find((request) => request.phase === "final");
+    expect(
+      finalPrompt?.board?.evidence.map((item) => item.trackedPath),
+    ).toEqual(["missing.ts", "claude-cross.ts", "codex-cross.ts"]);
+    expect(finalPrompt?.board?.claims[0]?.evidenceIds).toHaveLength(3);
     harness.database.close();
   });
 

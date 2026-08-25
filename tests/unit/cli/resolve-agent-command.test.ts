@@ -36,7 +36,12 @@ describe("resolveAgentCommand", () => {
       provider: "claude",
       configuredCommand: configured,
       platform: "win32",
-      env: { PATH: directory },
+      env: {
+        PATH: directory,
+        AI_WORKSPACE_DISCORD_TOKEN: "discord-secret",
+        OPENAI_API_KEY: "provider-secret",
+        UNRELATED_VALUE: "not-required",
+      },
       runProcess: successfulProbe(requests),
     });
 
@@ -48,7 +53,11 @@ describe("resolveAgentCommand", () => {
     expect(requests[0]).toMatchObject({
       command: configured,
       args: ["--version"],
+      env: { PATH: directory },
     });
+    expect(requests[0]?.env).not.toHaveProperty("AI_WORKSPACE_DISCORD_TOKEN");
+    expect(requests[0]?.env).not.toHaveProperty("OPENAI_API_KEY");
+    expect(requests[0]?.env).not.toHaveProperty("UNRELATED_VALUE");
   });
 
   test("selects a direct native executable from PATH without a shell", async () => {

@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute, posix, win32 } from "node:path";
+import { buildSafeEnvironment } from "../agents/safe-environment.js";
 import { runProcess } from "../platform/process-runner.js";
 
 export type AgentCommandProvider = "codex" | "claude";
@@ -148,7 +149,7 @@ export async function resolveAgentCommand(
   const env = input.env ?? process.env;
   const options = {
     cwd: input.cwd ?? process.cwd(),
-    env,
+    env: buildSafeEnvironment(env, []),
     runProcess: input.runProcess ?? runProcess,
   };
   const diagnostics: string[] = [];

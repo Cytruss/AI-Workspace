@@ -159,6 +159,41 @@ function boundedJson(
   return json;
 }
 
+const SECRET_NAME =
+  /(?:^|_)(?:api_?key|access_?key|authorization|cookie|credential|passphrase|password|private_?key|secret|token)(?:_|$)/i;
+
+function knownSecretValues(environment: NodeJS.ProcessEnv): readonly string[] {
+  return Object.entries(environment)
+    .filter(([name, value]) => SECRET_NAME.test(name) && value !== undefined)
+    .map(([, value]) => value as string)
+    .filter((value) => value.length > 0)
+    .sort((left, right) => right.length - left.length);
+}
+
+function redactString(value: string, secrets: readonly string[]): string {
+  return secrets.reduce(
+    (redacted, secret) => redacted.split(secret).join("[REDACTED]"),
+    value,
+  );
+}
+
+function redactKnownSecrets(
+  value: unknown,
+  secrets: readonly string[],
+): unknown {
+  if (typeof value === "string") return redactString(value, secrets);
+  if (Array.isArray(value))
+    return value.map((item) => redactKnownSecrets(item, secrets));
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        redactKnownSecrets(item, secrets),
+      ]),
+    );
+  return value;
+}
+
 function providerEnvelopeJson(
   value: unknown,
   expectedPhase: string,
@@ -293,7 +328,14 @@ function sessionFromRow(row: SessionRow): SessionRecord {
 }
 
 export class SessionRepository {
-  constructor(private readonly database: SqliteDatabase) {}
+  private readonly secrets: readonly string[];
+
+  constructor(
+    private readonly database: SqliteDatabase,
+    secretEnvironment: NodeJS.ProcessEnv = process.env,
+  ) {
+    this.secrets = knownSecretValues(secretEnvironment);
+  }
 
   create(input: CreateSessionInput): SessionRecord {
     const existing = this.findByInteractionId(input.interactionId);
@@ -334,6 +376,22 @@ export class SessionRepository {
       .get(scope.guildId, scope.channelId, scope.userId) as
       SessionRow | undefined;
     return row === undefined ? undefined : sessionFromRow(row);
+  }
+  recentForScope(scope: ProjectScope, limit: number): SessionRecord[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+      throw new Error("Recent session limit must be between 1 and 100");
+    return (
+      this.database
+        .prepare(
+          "SELECT * FROM sessions WHERE guild_id=? AND channel_id=? AND user_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .all(
+          scope.guildId,
+          scope.channelId,
+          scope.userId,
+          limit,
+        ) as SessionRow[]
+    ).map(sessionFromRow);
   }
   get(id: string): SessionRecord {
     const row = this.database
@@ -415,8 +473,12 @@ export class SessionRepository {
         input.id ?? randomUUID(),
         input.sessionId ?? null,
         input.code,
-        input.message,
-        boundedJson(input.context, "Error context", 262_144),
+        redactString(input.message, this.secrets),
+        boundedJson(
+          redactKnownSecrets(input.context, this.secrets),
+          "Error context",
+          262_144,
+        ),
         input.createdAt ?? new Date().toISOString(),
       );
   }
@@ -494,7 +556,11 @@ export class SessionRepository {
           input.outputBoardId ?? null,
           requestJson,
           input.durationMs ?? 0,
-          boundedJson(input.diagnostics ?? {}, "Agent diagnostics", 262_144),
+          boundedJson(
+            redactKnownSecrets(input.diagnostics ?? {}, this.secrets),
+            "Agent diagnostics",
+            262_144,
+          ),
           input.createdAt ?? new Date().toISOString(),
         );
     })();
@@ -539,7 +605,11 @@ export class SessionRepository {
           input.status,
           input.exitCode ?? null,
           input.durationMs ?? null,
-          boundedJson(input.diagnostics, "Agent diagnostics", 262_144),
+          boundedJson(
+            redactKnownSecrets(input.diagnostics, this.secrets),
+            "Agent diagnostics",
+            262_144,
+          ),
           new Date().toISOString(),
           input.id,
         );

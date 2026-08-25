@@ -73,7 +73,7 @@ describe("Discord response formatting", () => {
     expect(payload.content).not.toContain("/private/value");
   });
 
-  test("never emits model content when model verification is unverified", () => {
+  test("shows successful provider-default content with an unverified warning", () => {
     const payload = formatAskReport({
       sessionId: "session-unverified",
       status: "completed",
@@ -89,8 +89,35 @@ describe("Discord response formatting", () => {
         },
       ],
     });
-    expect(payload.content).not.toContain("unverified model answer");
+    expect(payload.content).toContain("unverified model answer");
     expect(payload.content).toContain("Verification marker: unverified");
+    expect(payload.content).toContain(
+      "Provider-default execution was successful but cannot be model-verified",
+    );
+  });
+
+  test("withholds content for an explicit selection that failed verification", () => {
+    const payload = formatAskReport({
+      sessionId: "session-explicit-unverified",
+      status: "partial",
+      project: { id: "demo", name: "Demo", root: "unused" },
+      results: [
+        {
+          agentId: "claude",
+          status: "failed",
+          response: "wrong model answer",
+          durationMs: 1,
+          diagnostics: ["MODEL_CLASS_CHANGED"],
+          modelExecution: {
+            requestedClass: "sonnet",
+            requestedCliModelId: "claude-sonnet",
+            observedModelIds: ["claude-opus"],
+            verification: "unverified",
+          },
+        },
+      ],
+    });
+    expect(payload.content).not.toContain("wrong model answer");
     expect(payload.content).toContain("Safe diagnostics");
   });
 
@@ -125,13 +152,42 @@ describe("Discord response formatting", () => {
           content: "Model says consensus",
         },
       ],
-      board: { version: 1, claims: [], evidence: [] },
+      board: {
+        version: 1,
+        claims: [
+          {
+            id: "claim-b",
+            text: "Use deterministic verdicts",
+            material: true,
+            evidenceIds: [],
+            origins: [],
+          },
+          {
+            id: "claim-a",
+            text: "Preserve disagreements",
+            material: true,
+            evidenceIds: [],
+            origins: [],
+          },
+        ],
+        evidence: [],
+      },
       consensus: [
         {
           claimId: "claim-b",
           classification: "CONSENSUS",
           support: "UNSUPPORTED",
-          finalStances: [],
+          finalStances: [
+            {
+              claimId: "claim-b",
+              value: "ACCEPT",
+              reasoning: "Determinism is auditable",
+              evidenceIds: [],
+              agentId: "codex",
+              agentRunId: "final-c",
+              roundId: "final-round",
+            },
+          ],
           evidence: [],
           provenance: [],
           counts: { accept: 0, dispute: 0, uncertain: 0 },
@@ -171,6 +227,10 @@ describe("Discord response formatting", () => {
       payload.content.indexOf("DISAGREEMENT"),
     );
     expect(payload.content).toContain("UNSUPPORTED");
+    expect(payload.content).toContain("Use deterministic verdicts");
+    expect(payload.content).toContain(
+      "Codex: ACCEPT — Determinism is auditable",
+    );
     expect(payload.content).toContain("Model says rejected");
     expect(payload.content).toContain("Model says consensus");
     expect(payload.content).toContain(
