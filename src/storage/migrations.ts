@@ -41,6 +41,17 @@ DROP TRIGGER IF EXISTS agent_runs_identity_immutable;
 CREATE TRIGGER agent_runs_identity_immutable BEFORE UPDATE OF session_id,agent_id,phase,purpose,round_id,input_board_id ON agent_runs WHEN NEW.session_id IS NOT OLD.session_id OR NEW.agent_id IS NOT OLD.agent_id OR NEW.phase IS NOT OLD.phase OR NEW.purpose IS NOT OLD.purpose OR NEW.round_id IS NOT OLD.round_id OR NEW.input_board_id IS NOT OLD.input_board_id BEGIN SELECT RAISE(ABORT, 'agent run identity is immutable'); END;
 `;
 
+const BOARD_SCOPED_ORIGINS = `
+CREATE TABLE claim_origins_v4 (id TEXT PRIMARY KEY, board_id TEXT NOT NULL, canonical_claim_id TEXT NOT NULL, agent_id TEXT NOT NULL, agent_run_id TEXT NOT NULL REFERENCES agent_runs(id), provider_local_id TEXT NOT NULL, FOREIGN KEY (board_id, canonical_claim_id) REFERENCES claims(board_id, canonical_id) ON DELETE CASCADE, UNIQUE (board_id, agent_run_id, provider_local_id));
+INSERT INTO claim_origins_v4 SELECT id, board_id, canonical_claim_id, agent_id, agent_run_id, provider_local_id FROM claim_origins;
+DROP TABLE claim_origins;
+ALTER TABLE claim_origins_v4 RENAME TO claim_origins;
+CREATE TABLE evidence_origins_v4 (id TEXT PRIMARY KEY, board_id TEXT NOT NULL, session_id TEXT NOT NULL, canonical_evidence_id TEXT NOT NULL, agent_id TEXT NOT NULL, agent_run_id TEXT NOT NULL, provider_local_id TEXT NOT NULL, FOREIGN KEY (board_id, canonical_evidence_id, session_id) REFERENCES evidence_references(board_id, canonical_id, session_id) ON DELETE CASCADE, FOREIGN KEY (agent_run_id, session_id) REFERENCES agent_runs(id, session_id), UNIQUE (board_id, agent_run_id, provider_local_id));
+INSERT INTO evidence_origins_v4 SELECT id, board_id, session_id, canonical_evidence_id, agent_id, agent_run_id, provider_local_id FROM evidence_origins;
+DROP TABLE evidence_origins;
+ALTER TABLE evidence_origins_v4 RENAME TO evidence_origins;
+`;
+
 export function migrateDatabase(database: SqliteDatabase): void {
   database.transaction(() => {
     database.exec(
@@ -83,6 +94,17 @@ export function migrateDatabase(database: SqliteDatabase): void {
           "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
         )
         .run(3, new Date().toISOString());
+    }
+    const boardScopedOriginsApplied = database
+      .prepare("SELECT 1 FROM schema_migrations WHERE version = ?")
+      .get(4);
+    if (boardScopedOriginsApplied === undefined) {
+      database.exec(BOARD_SCOPED_ORIGINS);
+      database
+        .prepare(
+          "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+        )
+        .run(4, new Date().toISOString());
     }
   })();
 }

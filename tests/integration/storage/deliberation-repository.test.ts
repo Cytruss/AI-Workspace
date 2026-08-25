@@ -446,6 +446,68 @@ describe("deliberation persistence", () => {
     database.close();
   });
 
+  test("preserves the same normalized origins independently on every carried board", () => {
+    const { database, sessions, session, deliberations } = setup();
+    sessions.createAgentRun({
+      id: "origin-run",
+      sessionId: session.id,
+      agentId: "codex",
+      phase: "ask",
+      purpose: "origin",
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "ask" },
+    });
+
+    for (const version of [1, 2]) {
+      const board = deliberations.createClaimBoard({
+        sessionId: session.id,
+        version,
+        payload: {
+          version,
+          claims: [{ id: "claim-0001" }],
+          evidence: [{ id: "evidence-0001" }],
+        },
+      });
+      deliberations.addClaim({
+        boardId: board.id,
+        canonicalId: "claim-0001",
+        normalizedText: "same",
+        material: true,
+      });
+      deliberations.addClaimOrigin({
+        boardId: board.id,
+        canonicalClaimId: "claim-0001",
+        agentId: "codex",
+        agentRunId: "origin-run",
+        providerLocalId: "claim-local",
+      });
+      deliberations.addEvidenceReference({
+        boardId: board.id,
+        sessionId: session.id,
+        canonicalId: "evidence-0001",
+        trackedPath: "src/index.ts",
+        resolution: "MISSING",
+      });
+      deliberations.addEvidenceOrigin({
+        boardId: board.id,
+        sessionId: session.id,
+        canonicalEvidenceId: "evidence-0001",
+        agentId: "codex",
+        agentRunId: "origin-run",
+        providerLocalId: "evidence-local",
+      });
+    }
+
+    const loaded = deliberations.load(session.id);
+    expect(loaded.claimOrigins.map((origin) => origin.boardId).sort()).toEqual(
+      loaded.boards.map((board) => board.id).sort(),
+    );
+    expect(
+      loaded.evidenceOrigins.map((origin) => origin.boardId).sort(),
+    ).toEqual(loaded.boards.map((board) => board.id).sort());
+    database.close();
+  });
+
   test("reconstructs explicit model selection unchanged across all debate phases", () => {
     const { database, sessions, session, deliberations } = setup();
     for (const [index, phase] of [

@@ -151,12 +151,6 @@ export class DebateService {
           agentRunId: origin.agentRunId,
           providerLocalId: origin.providerLocalId,
         });
-      for (const evidenceId of claim.evidenceIds)
-        this.dependencies.deliberation.linkClaimEvidence({
-          boardId: record.id,
-          canonicalClaimId: claim.id,
-          canonicalEvidenceId: evidenceId,
-        });
     }
     for (const evidence of board.evidence) {
       this.dependencies.deliberation.addEvidenceReference({
@@ -185,6 +179,13 @@ export class DebateService {
           providerLocalId: origin.providerLocalId,
         });
     }
+    for (const claim of board.claims)
+      for (const evidenceId of claim.evidenceIds)
+        this.dependencies.deliberation.linkClaimEvidence({
+          boardId: record.id,
+          canonicalClaimId: claim.id,
+          canonicalEvidenceId: evidenceId,
+        });
     return record;
   }
 
@@ -204,16 +205,30 @@ export class DebateService {
     sessionId: string,
     board: ClaimBoard,
   ) {
-    const snapshot = { ...board, version: board.version + 1 };
-    this.assertBoardBounds(config, snapshot);
+    this.assertBoardBounds(config, board);
     return {
-      board: snapshot,
-      record: this.dependencies.deliberation.createClaimBoard({
-        sessionId,
-        version: snapshot.version,
-        payload: snapshot,
-      }),
+      board,
+      record: this.persistBoard(sessionId, board),
     };
+  }
+
+  private boundedRequest(
+    config: DebateConfig,
+    phase: "cross-examination" | "final",
+    topic: string,
+    board: ClaimBoard,
+    reviewClaimIds: readonly string[],
+  ) {
+    const request = this.request(phase, topic, board, reviewClaimIds);
+    if (
+      board.claims.length > config.maxBoardClaims ||
+      Buffer.byteLength(canonicalJson(request), "utf8") > config.maxBoardBytes
+    )
+      throw new DebateServiceError(
+        "DEBATE_CONTEXT_LIMIT",
+        "Debate request exceeds the effective configured bounds",
+      );
+    return request;
   }
 
   private request(
@@ -545,6 +560,13 @@ export class DebateService {
           reviewClaimIds: unresolved,
           responseSchema: "cross-examination",
         });
+        const request = this.boundedRequest(
+          config,
+          "cross-examination",
+          input.topic,
+          context.board,
+          context.reviewClaimIds,
+        );
         const inputSnapshot = this.persistInputSnapshot(
           config,
           session.id,
@@ -557,12 +579,6 @@ export class DebateService {
           status: "running",
           inputBoardId: inputSnapshot.record.id,
         });
-        const request = this.request(
-          "cross-examination",
-          input.topic,
-          inputSnapshot.board,
-          context.reviewClaimIds,
-        );
         const schema = createCrossExaminationPhaseResponseSchema(
           context.reviewClaimIds,
           context.board.evidence.map((item) => item.id),
@@ -715,6 +731,13 @@ export class DebateService {
         reviewClaimIds: board.claims.map((claim) => claim.id),
         responseSchema: "final",
       });
+      const request = this.boundedRequest(
+        config,
+        "final",
+        input.topic,
+        finalContext.board,
+        finalContext.reviewClaimIds,
+      );
       const finalInputSnapshot = this.persistInputSnapshot(
         config,
         session.id,
@@ -727,12 +750,6 @@ export class DebateService {
         status: "running",
         inputBoardId: finalInputSnapshot.record.id,
       });
-      const request = this.request(
-        "final",
-        input.topic,
-        finalInputSnapshot.board,
-        finalContext.reviewClaimIds,
-      );
       const finalSchema = createFinalPhaseResponseSchema(
         finalContext.board.claims.map((claim) => claim.id),
         finalContext.board.evidence.map((item) => item.id),

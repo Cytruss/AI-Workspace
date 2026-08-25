@@ -24,7 +24,7 @@ export function buildDeliberationContext(
   }
   const evidenceIds = new Set(claims.flatMap((claim) => claim.evidenceIds));
   const board: ClaimBoard = {
-    version: input.board.version,
+    version: input.board.version + 1,
     claims,
     evidence: input.board.evidence.filter((evidence) =>
       evidenceIds.has(evidence.id),
