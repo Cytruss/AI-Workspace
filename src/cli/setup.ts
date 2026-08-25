@@ -68,27 +68,32 @@ export async function readSecret(
 ): Promise<string> {
   output.write(prompt);
   const terminalInput = input as NodeJS.ReadStream;
-  const restoreRaw =
-    terminalInput.isTTY === true && terminalInput.isRaw !== true;
-  if (restoreRaw) terminalInput.setRawMode?.(true);
+  const restoreRaw = terminalInput.isTTY && !terminalInput.isRaw;
+  if (restoreRaw) terminalInput.setRawMode(true);
   return new Promise<string>((resolve, reject) => {
     let value = "";
     const finish = () => {
       input.off("data", receive);
       input.off("error", fail);
-      if (restoreRaw) terminalInput.setRawMode?.(false);
+      if (restoreRaw) terminalInput.setRawMode(false);
       output.write("\n");
       resolve(value);
     };
     const fail = (error: Error) => {
       input.off("data", receive);
-      if (restoreRaw) terminalInput.setRawMode?.(false);
+      if (restoreRaw) terminalInput.setRawMode(false);
       reject(error);
     };
     const receive = (chunk: string | Buffer) => {
       for (const character of chunk.toString()) {
-        if (character === "\r" || character === "\n") return finish();
-        if (character === "\u0003") return fail(new Error("Setup cancelled"));
+        if (character === "\r" || character === "\n") {
+          finish();
+          return;
+        }
+        if (character === "\u0003") {
+          fail(new Error("Setup cancelled"));
+          return;
+        }
         if (character === "\b" || character === "\u007f")
           value = value.slice(0, -1);
         else value += character;
@@ -96,7 +101,7 @@ export async function readSecret(
     };
     input.on("data", receive);
     input.once("error", fail);
-    terminalInput.resume?.();
+    terminalInput.resume();
   });
 }
 
