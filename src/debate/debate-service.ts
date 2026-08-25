@@ -429,9 +429,9 @@ export class DebateService {
         const content =
           run.response !== null &&
           typeof run.response === "object" &&
-          "content" in run.response &&
-          typeof run.response.content === "string"
-            ? run.response.content
+          "displayContent" in run.response &&
+          typeof run.response.displayContent === "string"
+            ? run.response.displayContent
             : undefined;
         return {
           agentId: run.agentId,
@@ -556,7 +556,12 @@ export class DebateService {
           item.id,
           item.result,
           parsed.success && item.result.status === "completed"
-            ? parsed.data
+            ? {
+                ...parsed.data,
+                ...(item.result.response === undefined
+                  ? {}
+                  : { displayContent: item.result.response }),
+              }
             : undefined,
         );
         analyses.push({

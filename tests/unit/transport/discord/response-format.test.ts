@@ -152,7 +152,21 @@ describe("Discord response formatting", () => {
       unresolved: [],
       verdicts: [],
     };
-    const payload = formatDebateReport(report as never);
+    const payload = formatDebateReport(
+      report as never,
+      [
+        {
+          id: "run-c",
+          agentId: "codex",
+          modelExecution: { observedModelIds: [], verification: "verified" },
+        },
+        {
+          id: "run-a",
+          agentId: "claude",
+          modelExecution: { observedModelIds: [], verification: "verified" },
+        },
+      ] as never,
+    );
     expect(payload.content.indexOf("CONSENSUS")).toBeLessThan(
       payload.content.indexOf("DISAGREEMENT"),
     );
@@ -161,6 +175,33 @@ describe("Discord response formatting", () => {
     expect(payload.content).toContain("Model says consensus");
     expect(payload.content).toContain(
       "Mechanically resolved evidence and provenance",
+    );
+  });
+
+  test("withholds debate analysis content when persisted run metadata is absent", () => {
+    const payload = formatDebateReport({
+      sessionId: "missing-run",
+      status: "completed",
+      classification: "DEBATE",
+      projectId: "demo",
+      rounds: [],
+      verdicts: [],
+      consensus: [],
+      disagreements: [],
+      rejected: [],
+      unresolved: [],
+      analyses: [
+        {
+          agentId: "codex",
+          runId: "missing-run-id",
+          status: "completed",
+          content: "unverified debate analysis",
+        },
+      ],
+    } as never);
+    expect(payload.content).not.toContain("unverified debate analysis");
+    expect(payload.content).toContain(
+      "Content withheld because model verification is unverified",
     );
   });
 

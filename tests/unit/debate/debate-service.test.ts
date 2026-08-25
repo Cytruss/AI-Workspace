@@ -48,6 +48,7 @@ interface HarnessOptions {
   crossStance?: "ACCEPT" | "UNCERTAIN";
   initialClaimTexts?: Readonly<Record<"codex" | "claude", readonly string[]>>;
   topic?: string;
+  initialContent?: Readonly<Record<"codex" | "claude", string>>;
 }
 
 interface DebatePrompt {
@@ -91,6 +92,7 @@ async function createHarness(options: HarnessOptions = {}) {
     id: "codex" | "claude",
     status: "completed" | "failed" | "cancelled",
     structured?: object,
+    response?: string,
   ) =>
     ({
       agentId: id,
@@ -99,6 +101,7 @@ async function createHarness(options: HarnessOptions = {}) {
       modelExecution: { observedModelIds: [], verification: "unverified" },
       diagnostics: [],
       ...(structured === undefined ? {} : { structured }),
+      ...(response === undefined ? {} : { response }),
     }) as never;
   const adapter = (id: "codex" | "claude"): AgentAdapter => ({
     id,
@@ -123,16 +126,23 @@ async function createHarness(options: HarnessOptions = {}) {
       if (prompt.phase === "initial") {
         const evidenceLocalId = `${id}-evidence`;
         return Promise.resolve(
-          result(id, "completed", {
-            phase: "initial",
-            evidence: [{ localId: evidenceLocalId, trackedPath: "missing.ts" }],
-            claims: claimTexts[id].map((text, index) => ({
-              localId: `${id}-claim-${String(index + 1)}`,
-              text,
-              material: true,
-              evidenceLocalIds: [evidenceLocalId],
-            })),
-          }),
+          result(
+            id,
+            "completed",
+            {
+              phase: "initial",
+              evidence: [
+                { localId: evidenceLocalId, trackedPath: "missing.ts" },
+              ],
+              claims: claimTexts[id].map((text, index) => ({
+                localId: `${id}-claim-${String(index + 1)}`,
+                text,
+                material: true,
+                evidenceLocalIds: [evidenceLocalId],
+              })),
+            },
+            options.initialContent?.[id],
+          ),
         );
       }
       return Promise.resolve(
@@ -211,6 +221,30 @@ describe("DebateService", () => {
     const replay = harness.service.persistedReport(harness.input.interactionId);
 
     expect(replay).toEqual(original);
+    harness.database.close();
+  });
+
+  test("replays persisted nonempty initial analysis content", async () => {
+    const harness = await createHarness({
+      initialContent: {
+        codex: "Codex initial analysis",
+        claude: "Claude initial analysis",
+      },
+    });
+    await harness.service.debate(harness.input, DEFAULT_CONFIG);
+
+    expect(
+      harness.service.persistedReport(harness.input.interactionId)?.analyses,
+    ).toEqual([
+      expect.objectContaining({
+        agentId: "codex",
+        content: "Codex initial analysis",
+      }),
+      expect.objectContaining({
+        agentId: "claude",
+        content: "Claude initial analysis",
+      }),
+    ]);
     harness.database.close();
   });
 

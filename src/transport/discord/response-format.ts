@@ -194,7 +194,7 @@ export function formatDebateReport(
       const verification = runs.find((run) => run.id === analysis.runId)
         ?.modelExecution.verification;
       return `${agentName(analysis.agentId)} (${analysis.status}): ${
-        verification === undefined || verification === "verified"
+        verification === "verified"
           ? (analysis.content ?? "No content")
           : "Content withheld because model verification is unverified"
       }`;
