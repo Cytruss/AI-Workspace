@@ -21,6 +21,7 @@ export interface ResolveAgentCommandOptions {
   cwd?: string;
   runProcess?: typeof runProcess;
   inspectNativeFile?: (candidate: string) => Promise<boolean>;
+  inspectWindowsShim?: (candidate: string) => Promise<boolean>;
 }
 
 const probeTimeoutMs = 10_000;
@@ -82,6 +83,7 @@ function documentedCandidates(
   provider: AgentCommandProvider,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
+  inspectWindowsShim?: (candidate: string) => Promise<boolean>,
 ): string[] {
   if (provider !== "claude") return [];
   if (platform === "win32") {
@@ -132,11 +134,13 @@ async function includesWindowsShim(
   provider: AgentCommandProvider,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
+  inspectWindowsShim?: (candidate: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (platform !== "win32" || provider !== "claude" || !env.APPDATA)
     return false;
   try {
-    return (await stat(win32.join(env.APPDATA, "npm", "claude.cmd"))).isFile();
+    const shim = win32.join(env.APPDATA, "npm", "claude.cmd");
+    return inspectWindowsShim ? await inspectWindowsShim(shim) : (await stat(shim)).isFile();
   } catch {
     return false;
   }
@@ -221,7 +225,7 @@ export async function resolveAgentCommand(
       return {
         command: candidate,
         source: "candidate",
-        diagnostic: (await includesWindowsShim(input.provider, platform, env))
+        diagnostic: (await includesWindowsShim(input.provider, platform, env, input.inspectWindowsShim))
           ? "A Windows npm shim is diagnostic-only; its documented native target was verified directly."
           : "Documented native executable was verified with --version.",
       };
@@ -235,6 +239,7 @@ export async function resolveAgentCommand(
     input.provider,
     platform,
     env,
+    input.inspectWindowsShim,
   ))
     ? " A Windows npm shim is diagnostic-only; install or configure its native .exe target."
     : "";

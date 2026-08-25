@@ -43,6 +43,7 @@ describe("resolveAgentCommand", () => {
         UNRELATED_VALUE: "not-required",
       },
       runProcess: successfulProbe(requests),
+      inspectNativeFile: () => Promise.resolve(true),
     });
 
     expect(resolution).toMatchObject({
@@ -73,6 +74,8 @@ describe("resolveAgentCommand", () => {
       platform: "win32",
       env: { PATH: directory },
       runProcess: successfulProbe(requests),
+      inspectNativeFile: () => Promise.resolve(true),
+      inspectWindowsShim: () => Promise.resolve(false),
     });
 
     expect(resolution).toMatchObject({ command: executable, source: "path" });
@@ -112,6 +115,9 @@ describe("resolveAgentCommand", () => {
       platform: "win32",
       env: { APPDATA: appData, PATH: npm },
       runProcess: successfulProbe(requests),
+      inspectNativeFile: (candidate) =>
+        Promise.resolve(candidate.includes("node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe")),
+      inspectWindowsShim: () => Promise.resolve(true),
     });
 
     expect(resolution).toMatchObject({ command: native, source: "candidate" });
