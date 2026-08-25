@@ -224,7 +224,9 @@ describe("dual-agent vertical slice", () => {
       },
       cancellation.signal,
     );
-    setTimeout(() => cancellation.abort(), 25);
+    setTimeout(() => {
+      cancellation.abort();
+    }, 25);
     await expect(hanging).resolves.toMatchObject({ status: "cancelled" });
     database.close();
   });
