@@ -1,5 +1,8 @@
 import { canonicalJson } from "../storage/session-repository.js";
-import type { ClaimBoard } from "../agents/structured-response.js";
+import type {
+  ClaimBoard,
+  StanceRecord,
+} from "../agents/structured-response.js";
 import type { DebateConfig } from "../config/schema.js";
 import type { DeliberationContext } from "./types.js";
 
@@ -9,6 +12,37 @@ export class DebateContextLimitError extends Error {
     super(message);
     this.name = "DebateContextLimitError";
   }
+}
+
+export function carryStanceEvidence(
+  board: ClaimBoard,
+  stances: readonly StanceRecord[],
+): ClaimBoard {
+  const available = new Set(board.evidence.map((item) => item.id));
+  const evidenceByClaim = new Map<string, Set<string>>();
+  for (const stance of stances) {
+    const evidence = evidenceByClaim.get(stance.claimId) ?? new Set<string>();
+    for (const evidenceId of stance.evidenceIds) {
+      if (!available.has(evidenceId))
+        throw new Error(
+          `Stance references unavailable evidence: ${evidenceId}`,
+        );
+      evidence.add(evidenceId);
+    }
+    evidenceByClaim.set(stance.claimId, evidence);
+  }
+  return {
+    ...board,
+    claims: board.claims.map((claim) => ({
+      ...claim,
+      evidenceIds: [
+        ...new Set([
+          ...claim.evidenceIds,
+          ...(evidenceByClaim.get(claim.id) ?? []),
+        ]),
+      ].sort() as typeof claim.evidenceIds,
+    })),
+  };
 }
 
 export function buildDeliberationContext(

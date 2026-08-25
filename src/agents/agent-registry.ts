@@ -60,6 +60,12 @@ export function validateModelCapabilities(
       "The agent does not support an explicit model selection",
     );
   }
+  if (!capabilities.observedModelReporting.supported) {
+    throw new AgentBoundaryError(
+      "AGENT_MODEL_OBSERVATION_UNSUPPORTED",
+      "The agent cannot verify an explicit model selection",
+    );
+  }
   if (selection.requestedEffort === undefined) return;
   const allowed = capabilities.effortOption.allowedValues;
   if (

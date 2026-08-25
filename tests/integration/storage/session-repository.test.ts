@@ -13,6 +13,58 @@ function setup() {
 }
 
 describe("project and session repositories", () => {
+  test("redacts known secret values before persisting diagnostics and errors", () => {
+    const database = openDatabase(":memory:");
+    migrateDatabase(database);
+    const projects = new ProjectRepository(database);
+    projects.upsert({ id: "demo", name: "Demo", root: "/canonical/demo" });
+    const sessions = new SessionRepository(database, {
+      OPENAI_API_KEY: "provider-secret-value",
+      AI_WORKSPACE_DISCORD_TOKEN: "discord-secret-value",
+    });
+    const session = sessions.create({
+      interactionId: "redaction",
+      command: "ask",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      question: "Q",
+    });
+    sessions.createAgentRun({
+      id: "secret-run",
+      sessionId: session.id,
+      agentId: "codex",
+      phase: "ask",
+      purpose: "answer",
+      modelExecution: { observedModelIds: [], verification: "unverified" },
+      request: { phase: "ask" },
+    });
+    sessions.finishAgentRun({
+      id: "secret-run",
+      status: "failed",
+      diagnostics: [
+        "provider returned provider-secret-value",
+        { nested: "discord-secret-value" },
+      ],
+    });
+    sessions.addError({
+      sessionId: session.id,
+      code: "AGENT_FAILED",
+      message: "provider-secret-value failed",
+      context: { detail: "discord-secret-value" },
+    });
+
+    expect(JSON.stringify(sessions.getAgentRun("secret-run").diagnostics)).toBe(
+      '["provider returned [REDACTED]",{"nested":"[REDACTED]"}]',
+    );
+    expect(JSON.stringify(sessions.errors(session.id))).not.toContain(
+      "secret-value",
+    );
+    expect(JSON.stringify(sessions.errors(session.id))).toContain("[REDACTED]");
+    database.close();
+  });
+
   test("upserts projects and scopes active selection to guild, channel, and user", () => {
     const { database, projects } = setup();
     projects.setActive({ guildId: "g", channelId: "c", userId: "u" }, "demo");
@@ -44,6 +96,32 @@ describe("project and session repositories", () => {
     expect(() => {
       sessions.markRunning(session.id);
     }).toThrow(/transition/i);
+    database.close();
+  });
+
+  test("lists recent sessions only for the authorized guild, channel, and user", () => {
+    const { database, sessions } = setup();
+    const scope = { guildId: "g", channelId: "c", userId: "u" };
+    sessions.create({
+      interactionId: "matching",
+      command: "ask",
+      projectId: "demo",
+      ...scope,
+      question: "matching",
+    });
+    sessions.create({
+      interactionId: "other-channel",
+      command: "ask",
+      projectId: "demo",
+      guildId: "g",
+      channelId: "other",
+      userId: "u",
+      question: "private other scope",
+    });
+
+    expect(
+      sessions.recentForScope(scope, 5).map((item) => item.question),
+    ).toEqual(["matching"]);
     database.close();
   });
 

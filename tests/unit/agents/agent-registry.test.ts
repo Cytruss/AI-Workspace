@@ -21,7 +21,7 @@ const capabilities = (
   readOnlyEnforcement: true,
   modelOption: { supported: true, flag: "--model" },
   effortOption: { supported: true, flag: "--effort", allowedValues: ["high"] },
-  observedModelReporting: { supported: false },
+  observedModelReporting: { supported: true },
   diagnostics: [],
   ...overrides,
 });
@@ -183,6 +183,24 @@ describe("model selection boundary", () => {
         selection,
       );
     }).toThrow(expect.objectContaining({ code: "AGENT_MODEL_UNSUPPORTED" }));
+  });
+
+  test("requires observable model reporting only for explicit selections", () => {
+    const selection = resolveModelSelection(models, "terra");
+    expect(() => {
+      validateModelCapabilities(
+        capabilities({ observedModelReporting: { supported: false } }),
+        selection,
+      );
+    }).toThrow(
+      expect.objectContaining({ code: "AGENT_MODEL_OBSERVATION_UNSUPPORTED" }),
+    );
+    expect(() => {
+      validateModelCapabilities(
+        capabilities({ observedModelReporting: { supported: false } }),
+        undefined,
+      );
+    }).not.toThrow();
   });
 
   test("normalizes bounded observations without inventing observed effort", () => {

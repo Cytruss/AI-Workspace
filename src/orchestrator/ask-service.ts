@@ -57,6 +57,16 @@ interface PreparedAgent {
   config: AgentConfig;
 }
 
+interface PreparedAsk {
+  agents: readonly PreparedAgent[];
+  failures: readonly PreparedFailure[];
+}
+
+interface PreparedFailure {
+  code: string;
+  result: AgentResult;
+}
+
 export class AskServiceError extends Error {
   constructor(
     readonly code: string,
@@ -230,8 +240,11 @@ export class AskService {
         content: input.question,
       });
       this.dependencies.sessions.markRunning(session.id);
+      const preflightFailures = prepared.failures.map((failure) =>
+        this.persistPreflightFailure(session.id, input.question, failure),
+      );
       const settled = await Promise.allSettled(
-        prepared.map((agent) =>
+        prepared.agents.map((agent) =>
           this.runAgent(
             session.id,
             project,
@@ -244,7 +257,7 @@ export class AskService {
       const results = settled
         .map((entry, index) => {
           if (entry.status === "fulfilled") return entry.value;
-          const agent = prepared[index];
+          const agent = prepared.agents[index];
           if (agent === undefined) throw entry.reason;
           return failureResult(
             agent.adapter.id,
@@ -253,6 +266,7 @@ export class AskService {
             controller.signal.aborted,
           );
         })
+        .concat(preflightFailures)
         .sort(resultOrder);
       const status = resultStatus(results, controller.signal.aborted);
       this.markTerminal(session.id, status);
@@ -282,36 +296,109 @@ export class AskService {
   private async prepare(
     selection: AgentSelection,
     input: AskInput,
-  ): Promise<readonly PreparedAgent[]> {
-    const adapters = this.dependencies.registry.select(selection);
+  ): Promise<PreparedAsk> {
+    const agentIds: readonly AgentId[] =
+      selection === "both" ? ["codex", "claude"] : [selection];
     const requested = new Map<AgentId, string | undefined>([
       ["codex", input.codexModel],
       ["claude", input.claudeModel],
     ]);
-    const prepared = adapters.map((adapter) => {
+    const descriptors = agentIds.map((agentId) => {
       const config =
-        this.dependencies.config.agents[adapter.id as "codex" | "claude"];
+        this.dependencies.config.agents[agentId as "codex" | "claude"];
       return {
-        adapter,
+        agentId,
         config,
-        selection: resolveModelSelection(
-          config.models,
-          requested.get(adapter.id),
-        ),
+        selection: resolveModelSelection(config.models, requested.get(agentId)),
       };
     });
-    await Promise.all(
-      prepared.map(async (agent) => {
-        const capabilities = await agent.adapter.probe();
+    const settled = await Promise.allSettled(
+      descriptors.map(async (descriptor): Promise<PreparedAgent> => {
+        const adapter = this.dependencies.registry.get(descriptor.agentId);
+        const capabilities = await adapter.probe();
         if (!capabilities.available)
           throw new AskServiceError(
             "AGENT_UNAVAILABLE",
-            `Agent unavailable: ${agent.adapter.id}`,
+            `Agent unavailable: ${adapter.id}`,
           );
-        validateModelCapabilities(capabilities, agent.selection);
+        validateModelCapabilities(capabilities, descriptor.selection);
+        return {
+          adapter,
+          config: descriptor.config,
+          selection: descriptor.selection,
+        };
       }),
     );
-    return Object.freeze(prepared);
+    const rejected = settled.filter(
+      (entry): entry is PromiseRejectedResult => entry.status === "rejected",
+    );
+    if (selection !== "both" && rejected[0] !== undefined)
+      throw rejected[0].reason;
+    const blocking = rejected.find(
+      (entry) =>
+        !(entry.reason instanceof AskServiceError) ||
+        entry.reason.code !== "AGENT_UNAVAILABLE",
+    );
+    if (blocking !== undefined) throw blocking.reason;
+    const agents = settled.flatMap((entry) =>
+      entry.status === "fulfilled" ? [entry.value] : [],
+    );
+    const failures = settled.flatMap((entry, index) => {
+      if (entry.status === "fulfilled") return [];
+      const descriptor = descriptors[index];
+      if (descriptor === undefined) return [];
+      return [
+        {
+          code:
+            entry.reason instanceof AskServiceError
+              ? entry.reason.code
+              : "AGENT_FAILED",
+          result: failureResult(
+            descriptor.agentId,
+            descriptor.selection,
+            entry.reason,
+            false,
+          ),
+        },
+      ];
+    });
+    return Object.freeze({
+      agents: Object.freeze(agents),
+      failures: Object.freeze(failures),
+    });
+  }
+
+  private persistPreflightFailure(
+    sessionId: string,
+    question: string,
+    failure: PreparedFailure,
+  ): AgentResult {
+    const { result } = failure;
+    const runId = randomUUID();
+    this.dependencies.sessions.createAgentRun({
+      id: runId,
+      sessionId,
+      agentId: result.agentId,
+      modelExecution: storageExecution(result.modelExecution),
+      phase: "ask",
+      purpose: "answer preflight",
+      request: { phase: "ask", prompt: question },
+      diagnostics: [],
+    });
+    this.dependencies.sessions.finishAgentRun({
+      id: runId,
+      status: "failed",
+      modelExecution: storageExecution(result.modelExecution),
+      durationMs: result.durationMs,
+      diagnostics: result.diagnostics,
+    });
+    this.dependencies.sessions.addError({
+      sessionId,
+      code: failure.code,
+      message: result.diagnostics[0] ?? "Agent unavailable",
+      context: { agentId: result.agentId, runId },
+    });
+    return result;
   }
 
   private async runAgent(

@@ -30,7 +30,10 @@ import { canonicalJson } from "../storage/session-repository.js";
 import { ActiveRuns } from "../orchestrator/active-runs.js";
 import { ConcurrencyGate } from "../orchestrator/concurrency-gate.js";
 import { appendPhaseEvidence, createInitialClaimBoard } from "./claim-board.js";
-import { buildDeliberationContext } from "./context-builder.js";
+import {
+  buildDeliberationContext,
+  carryStanceEvidence,
+} from "./context-builder.js";
 import type { DebateInput, DebateReport, DebateRoundSummary } from "./types.js";
 import { deriveVerdicts } from "./verdicts.js";
 
@@ -374,6 +377,99 @@ export class DebateService {
     });
   }
 
+  persistedReport(interactionId: string): DebateReport | undefined {
+    const session =
+      this.dependencies.sessions.findByInteractionId(interactionId);
+    if (
+      session === undefined ||
+      session.command !== "debate" ||
+      !["completed", "partial", "failed", "cancelled"].includes(session.status)
+    )
+      return undefined;
+    const persisted = this.dependencies.deliberation.load(session.id);
+    const finalRound = [...persisted.rounds]
+      .filter((round) => round.phase === "final")
+      .at(-1);
+    const boardRecord =
+      finalRound?.outputBoardId === undefined
+        ? persisted.boards.at(-1)
+        : persisted.boards.find(
+            (board) => board.id === finalRound.outputBoardId,
+          );
+    const evidenceByStance = new Map(
+      persisted.stanceEvidence.reduce<readonly [string, readonly string[]][]>(
+        (entries, link) => {
+          const current =
+            entries.find(([id]) => id === link.stanceId)?.[1] ?? [];
+          return [
+            ...entries.filter(([id]) => id !== link.stanceId),
+            [link.stanceId, [...current, link.canonicalEvidenceId]],
+          ];
+        },
+        [],
+      ),
+    );
+    const finalStances = persisted.stances
+      .filter((stance) => stance.roundId === finalRound?.id)
+      .map(
+        (stance) =>
+          ({
+            claimId: stance.canonicalClaimId,
+            value: stance.stance,
+            reasoning: stance.reasoning,
+            evidenceIds: evidenceByStance.get(stance.id) ?? [],
+            agentId: stance.agentId,
+            agentRunId: stance.agentRunId,
+            roundId: stance.roundId,
+          }) as StanceRecord,
+      );
+    const analyses = persisted.runs
+      .filter((run) => run.phase === "initial")
+      .sort((left, right) =>
+        left.agentId === right.agentId ? 0 : left.agentId === "codex" ? -1 : 1,
+      )
+      .map((run) => {
+        const content =
+          run.response !== null &&
+          typeof run.response === "object" &&
+          "displayContent" in run.response &&
+          typeof run.response.displayContent === "string"
+            ? run.response.displayContent
+            : undefined;
+        return {
+          agentId: run.agentId,
+          runId: run.id,
+          status: run.status,
+          ...(content === undefined ? {} : { content }),
+        } as DebateReport["analyses"][number];
+      });
+    const rounds: DebateRoundSummary[] = persisted.rounds.map((round) => ({
+      id: round.id,
+      number: round.roundNumber,
+      phase: (round.phase === "cross_examination"
+        ? "cross-examination"
+        : round.phase) as DebateRoundSummary["phase"],
+      status: round.status === "running" ? "failed" : round.status,
+    }));
+    const status =
+      session.status === "completed" ||
+      session.status === "partial" ||
+      session.status === "failed" ||
+      session.status === "cancelled"
+        ? session.status
+        : "failed";
+    return this.report(
+      session.id,
+      session.projectId,
+      status,
+      boardRecord === undefined ? "DEBATE_NOT_ESTABLISHED" : "DEBATE",
+      rounds,
+      boardRecord?.payload as ClaimBoard | undefined,
+      finalStances,
+      analyses,
+    );
+  }
+
   async debate(
     input: DebateInput,
     config: DebateConfig,
@@ -463,7 +559,12 @@ export class DebateService {
           item.id,
           item.result,
           parsed.success && item.result.status === "completed"
-            ? parsed.data
+            ? {
+                ...parsed.data,
+                ...(item.result.response === undefined
+                  ? {}
+                  : { displayContent: item.result.response }),
+              }
             : undefined,
         );
         analyses.push({
@@ -638,12 +739,10 @@ export class DebateService {
             })),
           ),
         );
-        const output = {
+        const outputWithoutStanceEvidence = {
           ...appended.board,
           version: inputSnapshot.board.version + 1,
         };
-        this.assertBoardBounds(config, output);
-        const outputRecord = this.persistBoard(session.id, output);
         const roundStatus = controller.signal.aborted
           ? "cancelled"
           : valid.length === 2
@@ -651,29 +750,9 @@ export class DebateService {
             : valid.length === 0
               ? "failed"
               : "partial";
-        this.dependencies.deliberation.finishRound(
-          round.id,
-          roundStatus,
-          outputRecord.id,
-        );
-        rounds.push({
-          id: round.id,
-          number: roundNumber + 1,
-          phase: "cross-examination",
-          status: roundStatus,
-        });
         const crossStances: StanceRecord[] = [];
         for (const item of valid)
           for (const stance of schema.parse(item.result.structured).stances) {
-            const record = this.dependencies.deliberation.addStance({
-              boardId: outputRecord.id,
-              canonicalClaimId: stance.claimId,
-              roundId: round.id,
-              agentRunId: item.id,
-              agentId: item.agent.adapter.id,
-              stance: stance.value,
-              reasoning: stance.reasoning,
-            });
             const evidenceIds = [
               ...stance.existingEvidenceIds,
               ...stance.newEvidenceLocalIds.map((localId) => {
@@ -688,12 +767,6 @@ export class DebateService {
                 return id;
               }),
             ];
-            for (const evidenceId of evidenceIds)
-              this.dependencies.deliberation.linkStanceEvidence({
-                stanceId: record.id,
-                boardId: outputRecord.id,
-                canonicalEvidenceId: evidenceId,
-              });
             crossStances.push({
               claimId: stance.claimId,
               value: stance.value,
@@ -704,6 +777,40 @@ export class DebateService {
               roundId: round.id,
             });
           }
+        const output = carryStanceEvidence(
+          outputWithoutStanceEvidence,
+          crossStances,
+        );
+        this.assertBoardBounds(config, output);
+        const outputRecord = this.persistBoard(session.id, output);
+        this.dependencies.deliberation.finishRound(
+          round.id,
+          roundStatus,
+          outputRecord.id,
+        );
+        rounds.push({
+          id: round.id,
+          number: roundNumber + 1,
+          phase: "cross-examination",
+          status: roundStatus,
+        });
+        for (const stance of crossStances) {
+          const record = this.dependencies.deliberation.addStance({
+            boardId: outputRecord.id,
+            canonicalClaimId: stance.claimId,
+            roundId: stance.roundId,
+            agentRunId: stance.agentRunId,
+            agentId: stance.agentId,
+            stance: stance.value,
+            reasoning: stance.reasoning,
+          });
+          for (const evidenceId of stance.evidenceIds)
+            this.dependencies.deliberation.linkStanceEvidence({
+              stanceId: record.id,
+              boardId: outputRecord.id,
+              canonicalEvidenceId: evidenceId,
+            });
+        }
         board = output;
         boardRecord = outputRecord;
         unresolved = board.claims

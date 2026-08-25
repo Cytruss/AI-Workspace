@@ -48,6 +48,8 @@ interface HarnessOptions {
   crossStance?: "ACCEPT" | "UNCERTAIN";
   initialClaimTexts?: Readonly<Record<"codex" | "claude", readonly string[]>>;
   topic?: string;
+  initialContent?: Readonly<Record<"codex" | "claude", string>>;
+  crossAddsEvidence?: boolean;
 }
 
 interface DebatePrompt {
@@ -91,6 +93,7 @@ async function createHarness(options: HarnessOptions = {}) {
     id: "codex" | "claude",
     status: "completed" | "failed" | "cancelled",
     structured?: object,
+    response?: string,
   ) =>
     ({
       agentId: id,
@@ -99,6 +102,7 @@ async function createHarness(options: HarnessOptions = {}) {
       modelExecution: { observedModelIds: [], verification: "unverified" },
       diagnostics: [],
       ...(structured === undefined ? {} : { structured }),
+      ...(response === undefined ? {} : { response }),
     }) as never;
   const adapter = (id: "codex" | "claude"): AgentAdapter => ({
     id,
@@ -110,7 +114,7 @@ async function createHarness(options: HarnessOptions = {}) {
         readOnlyEnforcement: true,
         modelOption: { supported: true },
         effortOption: { supported: true },
-        observedModelReporting: { supported: false },
+        observedModelReporting: { supported: true },
         diagnostics: [],
       }),
     run: (request) => {
@@ -123,22 +127,37 @@ async function createHarness(options: HarnessOptions = {}) {
       if (prompt.phase === "initial") {
         const evidenceLocalId = `${id}-evidence`;
         return Promise.resolve(
-          result(id, "completed", {
-            phase: "initial",
-            evidence: [{ localId: evidenceLocalId, trackedPath: "missing.ts" }],
-            claims: claimTexts[id].map((text, index) => ({
-              localId: `${id}-claim-${String(index + 1)}`,
-              text,
-              material: true,
-              evidenceLocalIds: [evidenceLocalId],
-            })),
-          }),
+          result(
+            id,
+            "completed",
+            {
+              phase: "initial",
+              evidence: [
+                { localId: evidenceLocalId, trackedPath: "missing.ts" },
+              ],
+              claims: claimTexts[id].map((text, index) => ({
+                localId: `${id}-claim-${String(index + 1)}`,
+                text,
+                material: true,
+                evidenceLocalIds: [evidenceLocalId],
+              })),
+            },
+            options.initialContent?.[id],
+          ),
         );
       }
       return Promise.resolve(
         result(id, "completed", {
           phase: prompt.phase,
-          newEvidence: [],
+          newEvidence:
+            prompt.phase === "cross-examination" && options.crossAddsEvidence
+              ? [
+                  {
+                    localId: `${id}-cross-evidence`,
+                    trackedPath: `${id}-cross.ts`,
+                  },
+                ]
+              : [],
           stances: (prompt.reviewClaimIds ?? []).map((claimId) => ({
             claimId,
             value:
@@ -147,7 +166,10 @@ async function createHarness(options: HarnessOptions = {}) {
                 : "ACCEPT",
             reasoning: "supported",
             existingEvidenceIds: [],
-            newEvidenceLocalIds: [],
+            newEvidenceLocalIds:
+              prompt.phase === "cross-examination" && options.crossAddsEvidence
+                ? [`${id}-cross-evidence`]
+                : [],
           })),
         }),
       );
@@ -202,6 +224,42 @@ async function createHarness(options: HarnessOptions = {}) {
 }
 
 describe("DebateService", () => {
+  test("reconstructs a complete terminal report for a repeated interaction", async () => {
+    const harness = await createHarness();
+    const original = await harness.service.debate(
+      harness.input,
+      DEFAULT_CONFIG,
+    );
+    const replay = harness.service.persistedReport(harness.input.interactionId);
+
+    expect(replay).toEqual(original);
+    harness.database.close();
+  });
+
+  test("replays persisted nonempty initial analysis content", async () => {
+    const harness = await createHarness({
+      initialContent: {
+        codex: "Codex initial analysis",
+        claude: "Claude initial analysis",
+      },
+    });
+    await harness.service.debate(harness.input, DEFAULT_CONFIG);
+
+    expect(
+      harness.service.persistedReport(harness.input.interactionId)?.analyses,
+    ).toEqual([
+      expect.objectContaining({
+        agentId: "codex",
+        content: "Codex initial analysis",
+      }),
+      expect.objectContaining({
+        agentId: "claude",
+        content: "Claude initial analysis",
+      }),
+    ]);
+    harness.database.close();
+  });
+
   test("exposes stable boundary error codes", () => {
     expect(
       new DebateServiceError("PROJECT_REQUIRED", "Select a project"),
@@ -242,6 +300,24 @@ describe("DebateService", () => {
         ),
       ).toHaveLength(2);
     }
+    harness.database.close();
+  });
+
+  test("supplies cross-examination evidence with its claim in the final provider context", async () => {
+    const harness = await createHarness({ crossAddsEvidence: true });
+
+    await harness.service.debate(harness.input, {
+      ...DEFAULT_CONFIG,
+      maxBoardBytes: 16_384,
+    });
+
+    const finalPrompt = harness.requests
+      .map(parsePrompt)
+      .find((request) => request.phase === "final");
+    expect(
+      finalPrompt?.board?.evidence.map((item) => item.trackedPath),
+    ).toEqual(["missing.ts", "claude-cross.ts", "codex-cross.ts"]);
+    expect(finalPrompt?.board?.claims[0]?.evidenceIds).toHaveLength(3);
     harness.database.close();
   });
 
