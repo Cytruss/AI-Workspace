@@ -116,7 +116,11 @@ describe("resolveAgentCommand", () => {
       env: { APPDATA: appData, PATH: npm },
       runProcess: successfulProbe(requests),
       inspectNativeFile: (candidate) =>
-        Promise.resolve(candidate.includes("node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe")),
+        Promise.resolve(
+          candidate.includes(
+            "node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+          ),
+        ),
       inspectWindowsShim: () => Promise.resolve(true),
     });
 

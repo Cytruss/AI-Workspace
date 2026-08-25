@@ -140,7 +140,9 @@ async function includesWindowsShim(
     return false;
   try {
     const shim = win32.join(env.APPDATA, "npm", "claude.cmd");
-    return inspectWindowsShim ? await inspectWindowsShim(shim) : (await stat(shim)).isFile();
+    return inspectWindowsShim
+      ? await inspectWindowsShim(shim)
+      : (await stat(shim)).isFile();
   } catch {
     return false;
   }
@@ -225,7 +227,12 @@ export async function resolveAgentCommand(
       return {
         command: candidate,
         source: "candidate",
-        diagnostic: (await includesWindowsShim(input.provider, platform, env, input.inspectWindowsShim))
+        diagnostic: (await includesWindowsShim(
+          input.provider,
+          platform,
+          env,
+          input.inspectWindowsShim,
+        ))
           ? "A Windows npm shim is diagnostic-only; its documented native target was verified directly."
           : "Documented native executable was verified with --version.",
       };
