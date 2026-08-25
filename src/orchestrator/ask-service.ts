@@ -59,7 +59,12 @@ interface PreparedAgent {
 
 interface PreparedAsk {
   agents: readonly PreparedAgent[];
-  failures: readonly AgentResult[];
+  failures: readonly PreparedFailure[];
+}
+
+interface PreparedFailure {
+  code: string;
+  result: AgentResult;
 }
 
 export class AskServiceError extends Error {
@@ -235,8 +240,8 @@ export class AskService {
         content: input.question,
       });
       this.dependencies.sessions.markRunning(session.id);
-      const preflightFailures = prepared.failures.map((result) =>
-        this.persistPreflightFailure(session.id, input.question, result),
+      const preflightFailures = prepared.failures.map((failure) =>
+        this.persistPreflightFailure(session.id, input.question, failure),
       );
       const settled = await Promise.allSettled(
         prepared.agents.map((agent) =>
@@ -324,9 +329,17 @@ export class AskService {
         };
       }),
     );
-    const rejected = settled.find((entry) => entry.status === "rejected");
-    if (selection !== "both" && rejected?.status === "rejected")
-      throw rejected.reason;
+    const rejected = settled.filter(
+      (entry): entry is PromiseRejectedResult => entry.status === "rejected",
+    );
+    if (selection !== "both" && rejected[0] !== undefined)
+      throw rejected[0].reason;
+    const blocking = rejected.find(
+      (entry) =>
+        !(entry.reason instanceof AskServiceError) ||
+        entry.reason.code !== "AGENT_UNAVAILABLE",
+    );
+    if (blocking !== undefined) throw blocking.reason;
     const agents = settled.flatMap((entry) =>
       entry.status === "fulfilled" ? [entry.value] : [],
     );
@@ -335,12 +348,18 @@ export class AskService {
       const descriptor = descriptors[index];
       if (descriptor === undefined) return [];
       return [
-        failureResult(
-          descriptor.agentId,
-          descriptor.selection,
-          entry.reason,
-          false,
-        ),
+        {
+          code:
+            entry.reason instanceof AskServiceError
+              ? entry.reason.code
+              : "AGENT_FAILED",
+          result: failureResult(
+            descriptor.agentId,
+            descriptor.selection,
+            entry.reason,
+            false,
+          ),
+        },
       ];
     });
     return Object.freeze({
@@ -352,8 +371,9 @@ export class AskService {
   private persistPreflightFailure(
     sessionId: string,
     question: string,
-    result: AgentResult,
+    failure: PreparedFailure,
   ): AgentResult {
+    const { result } = failure;
     const runId = randomUUID();
     this.dependencies.sessions.createAgentRun({
       id: runId,
@@ -374,7 +394,7 @@ export class AskService {
     });
     this.dependencies.sessions.addError({
       sessionId,
-      code: "AGENT_UNAVAILABLE",
+      code: failure.code,
       message: result.diagnostics[0] ?? "Agent unavailable",
       context: { agentId: result.agentId, runId },
     });

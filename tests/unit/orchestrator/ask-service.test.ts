@@ -386,6 +386,89 @@ describe("AskService", () => {
     ]);
     expect(codex.runCount).toBe(1);
     expect(sessions.agentRuns(report.sessionId)).toHaveLength(2);
+    expect(sessions.errors(report.sessionId)).toEqual([
+      expect.objectContaining({ code: "AGENT_UNAVAILABLE" }),
+    ]);
+    database.close();
+  });
+
+  test.each([
+    [
+      "model selection",
+      { ...capability, modelOption: { supported: false } },
+      {
+        selections: [
+          {
+            class: "sol",
+            cliModelId: "gpt-sol",
+            acceptedObservedModels: { exactIds: [], literalPrefixes: [] },
+          },
+        ],
+      },
+      "AGENT_MODEL_UNSUPPORTED",
+    ],
+    [
+      "model observation",
+      { ...capability, observedModelReporting: { supported: false } },
+      {
+        selections: [
+          {
+            class: "sol",
+            cliModelId: "gpt-sol",
+            acceptedObservedModels: { exactIds: [], literalPrefixes: [] },
+          },
+        ],
+      },
+      "AGENT_MODEL_OBSERVATION_UNSUPPORTED",
+    ],
+    [
+      "effort",
+      {
+        ...capability,
+        effortOption: { supported: true, allowedValues: ["low"] },
+      },
+      {
+        selections: [
+          {
+            class: "sol",
+            cliModelId: "gpt-sol",
+            requestedEffort: "high",
+            acceptedObservedModels: { exactIds: [], literalPrefixes: [] },
+          },
+        ],
+      },
+      "AGENT_EFFORT_UNSUPPORTED",
+    ],
+  ] as const)(
+    "rejects a %s capability failure for /ask both before any provider execution",
+    async (_name, failedCapability, modelSettings, code) => {
+      const codex = adapter("codex", result("codex"));
+      codex.probe = vi.fn().mockResolvedValue(failedCapability);
+      const claude = adapter("claude", result("claude"));
+      const { database, service, sessions } = await setup([codex, claude], {
+        codex: modelSettings,
+      });
+
+      await expect(
+        service.ask({ ...input, codexModel: "sol" }),
+      ).rejects.toMatchObject({ code });
+      expect(codex.runCount).toBe(0);
+      expect(claude.runCount).toBe(0);
+      expect(sessions.findByInteractionId(input.interactionId)).toBeUndefined();
+      database.close();
+    },
+  );
+
+  test("rethrows an unexpected /ask both probe error before persistence or execution", async () => {
+    const codex = adapter("codex", result("codex"));
+    codex.probe = vi.fn().mockRejectedValue(new Error("probe crashed"));
+    const claude = adapter("claude", result("claude"));
+    const { database, service, sessions } = await setup([codex, claude]);
+
+    await expect(service.ask(input)).rejects.toThrow("probe crashed");
+    expect(codex.runCount).toBe(0);
+    expect(claude.runCount).toBe(0);
+    expect(sessions.findByInteractionId(input.interactionId)).toBeUndefined();
     database.close();
   });
 
