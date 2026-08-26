@@ -20,6 +20,11 @@ On Windows, use Node.js 22, pnpm 11, and Git. Node 22 is the CI-tested applicati
 pnpm install --frozen-lockfile
 ```
 
+Choose one Windows setup path:
+
+- Follow the [manual Windows setup guide](docs/guides/windows-manual-setup.md) to control every step yourself.
+- Run `pnpm onboarding` for a local Guided or consented Semi-automatic walkthrough.
+
 You also need:
 
 - A Discord account that can install a bot into a private server you control.
