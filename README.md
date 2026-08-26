@@ -99,13 +99,13 @@ Use placeholders in notes and screenshots. Never replace the placeholders below 
 | `Project id|name|absolute-root (blank to finish):` | `project-one|My project|<ABSOLUTE_PROJECT_ROOT>` | Registers a project. The ID must be lowercase letters, digits, and hyphens; the root must be absolute. Enter each project on its own prompt, then submit a blank response. |
 | `codex native executable path (optional):` | `<ABSOLUTE_PATH_TO_CODEX_EXE>` or blank | A blank asks setup to find a verified native executable. A supplied path must be a regular native executable. |
 | `Save this portable native executable path for codex? (yes/no):` | `yes` after inspecting the reported `.exe` | Setup will not save an executable path without this confirmation. |
-| Codex model-class prompt | Blank for provider default, or `<CLASS>|<CLI_MODEL_ID>|<EFFORT>|<EXACT_OBSERVED_MODEL_IDS>|<LITERAL_PREFIXES>` | Optional local policy, not an entitlement claim. Add zero or more entries, then blank to finish. |
-| `codex default model class (blank for provider default):` | A configured class or blank | Leave blank unless it exactly matches a class entered above. |
+| Codex model-class prompt | Blank | Leave this blank. The current Codex probe cannot report observed model IDs, so any configured Codex model class makes doctor unhealthy. |
+| `codex default model class (blank for provider default):` | Blank | Leave this blank too. Only provider-default Codex execution can pass the currently documented preflight. |
 | Claude prompts | Use the corresponding `.exe`, model entries, and default-class choices | The same native-executable and optional-model rules apply. |
 | `Discord token:` | Paste the private bot token only into this hidden prompt | It is written only to the ignored `.env` file as `AI_WORKSPACE_DISCORD_TOKEN`. Do not type it as a command argument. |
 | `Create local configuration and .env now? (yes/no):` | `yes` only after reviewing every answer | Writes local configuration and creates `.env`; if `.env` already exists, resolve that deliberately instead of overwriting it. |
 
-Model classes such as `sol`, `terra`, `luna`, `opus`, `fable`, `sonnet`, and `haiku` are optional local names, not claims that your account can use those models. An exact observed-model ID or literal prefix is required for a configured class. Leave all model entries and defaults blank to use the provider default, understanding that provider-default execution is unverified.
+Model classes such as `sol`, `terra`, `luna`, `opus`, `fable`, `sonnet`, and `haiku` are optional local names, not claims that your account can use those models. For Codex, leave every model entry and its default blank: its current probe has no observed-model reporting, so any non-empty configured selection intentionally fails doctor. For Claude, an exact observed-model ID or literal prefix is required for a configured class. Provider-default execution is unverified.
 
 ## 4. Check the local machine with `pnpm run doctor`
 
@@ -115,22 +115,22 @@ Run this before starting the bot:
 pnpm run doctor
 ```
 
-Doctor reports Node, then checks Git, the local database, each registered project, native executable resolution, and the providers' safety/model/effort/observation capabilities. It makes no paid model call.
+Doctor reports Node, then checks Git, the local database, each registered project, native executable resolution, and the providers' safety/model/effort/observation capabilities. Its provider probes execute only `--version` and `--help`; it makes no paid model call and cannot establish sign-in, account entitlement, or real-request readiness.
 
 | Doctor outcome | Action |
 | --- | --- |
-| Both providers are available and no mandatory contract failure is reported | Continue to `pnpm start`; this is a prerequisite check, not a real-provider smoke test. |
+| Both providers are available and no mandatory contract failure is reported | Continue to `pnpm start`; the executable and capability preflight passed, but this is not an authentication or real-provider smoke test. |
 | Native executable unresolved, version probe fails, or a `.cmd`/`.bat` shim is reported | Install or configure the provider's native `.exe`, then rerun setup or correct local configuration. |
-| Authentication or capability probe fails | Sign in to that provider CLI separately, confirm its supported non-interactive/read-only/structured-output capabilities, then rerun doctor. |
+| Executable or capability probe fails | Correct the native executable or supported non-interactive/read-only/structured-output configuration, then rerun doctor. Doctor cannot diagnose sign-in; verify authentication, entitlement, and real-request readiness only with an opt-in provider request. |
 | Project is invalid | Correct the registered absolute root and rerun setup. |
 | Config or database is unavailable | Check the local application-data directory and the ignored `.env`; do not post their contents. |
-| A configured model class, effort, or observed-model policy is unsupported | Correct the local model policy or use provider defaults. Do not relabel persisted evidence or a verdict. |
+| A configured model class, effort, or observed-model policy is unsupported | For Codex, leave all model selections and its default blank; only provider defaults can pass this preflight. For Claude, correct the local policy or use the provider default. Do not relabel persisted evidence or a verdict. |
 
 Doctor's shareable output redacts home-relative executable details, but still review it before sharing. It warns when managed provider settings may override inline controls and when a fallback might incur cost before a model-class mismatch is rejected.
 
 ## 5. First private session
 
-Only after you deliberately accept the provider-cost boundary, start the bot from the AI Workspace working folder:
+Only after you deliberately accept the provider-cost boundary, start the bot from the AI Workspace working folder. An opt-in provider request below—not doctor—is the first check of provider authentication, entitlement, and real-request readiness:
 
 ```powershell
 pnpm start
@@ -155,11 +155,11 @@ After the first request, inspect the selected project yourself with `git status 
 | Symptom | Likely cause | Safe next step |
 | --- | --- | --- |
 | Setup rejects a command ending in `.cmd` or `.bat` | The application intentionally refuses Windows shims. | Locate or install the provider's native `.exe`; do not rename or wrap the shim. |
-| Setup cannot find a provider executable | The CLI is not installed, not authenticated, or no native executable is available. | Complete the provider's official installation and sign-in first, verify `--version`, then enter the native path in setup. |
+| Setup cannot find a provider executable | The CLI is not installed or no native executable is available. | Complete the provider's official installation, verify `--version`, then enter the native path in setup. Sign-in is verified only by an opt-in provider request. |
 | The bot is online but commands do not appear | The bot may not be installed into the selected guild, its application ID/guild allowlist may be wrong, or channel permissions may block it. | Check the Developer Portal **Installation** settings, private-guild install, and intended-channel View/Send/Application-Commands permissions. |
 | A command says the server or user is not authorized | The guild ID or user ID was not included at setup. | Recopy the ID with Developer Mode and rerun setup; do not send the ID in public support channels. |
 | `/ask` says no active project is selected | `/switch` has not been run for this guild/channel/user. | Run `/projects`, then `/switch project:<YOUR_PROJECT_ID>`. |
-| Doctor says a model or effort contract is unavailable | A configured selection does not match provider capabilities or observed-model policy. | Use an allowed configured class or leave model selections blank for the provider default; do not weaken persisted evidence. |
+| Doctor says a model or effort contract is unavailable | A configured selection does not match provider capabilities or observed-model policy. | For Codex, leave every model selection and its default blank. For Claude, use an allowed configured class or leave its selections blank for the provider default; do not weaken persisted evidence. |
 | A provider result is partial, failed, or cancelled | A provider, authentication, network, timeout, safety contract, or cancellation interrupted work. | Use `/status` for the persisted record, fix the reported local condition, then issue a new read-only request. |
 | Installation or a quality command cannot build the native database dependency on Windows | The machine lacks a compatible native build prerequisite or runtime combination. | Install the documented Windows C++ build prerequisites or use the supported Node runtime; do not change package or CI configuration merely to bypass the failure. |
 
