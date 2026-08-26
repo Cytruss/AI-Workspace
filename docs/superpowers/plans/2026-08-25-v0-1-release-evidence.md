@@ -31,7 +31,17 @@ Test total: unavailable — the test runner did not start. This is a local Windo
 - Successful checks: secret-scan, quality (ubuntu-latest), quality (macos-latest), and quality (windows-latest).
 - The Task 3 CI log was scanned for Node-20 and action-runtime warnings; none were observed.
 
-These results support Task 3 CI evidence only. Task 4 pull-request CI evidence is pending creation of this branch's pull request; no Task 4 pull request URL, run, or head commit is available yet.
+These results support Task 3 CI evidence only.
+
+## Task 4 remote CI evidence
+
+- Pull request: https://github.com/Cytruss/AI-Workspace/pull/5
+- Head commit: `18d8f2d2798ce22dda5e19c4c4a4e71f5d1b3c67`
+- CI run: https://github.com/Cytruss/AI-Workspace/actions/runs/32943395691
+- Successful checks: secret-scan, quality (ubuntu-latest), quality (macos-latest), and quality (windows-latest).
+- The immutable full run log confirms the reviewed maintained action versions and that application quality ran on Node 22. A full-log scan found no Node-20 action-runtime warning.
+
+These results support Task 4 CI evidence only; they do not replace or reinterpret the Task 3 evidence above.
 
 ## Opt-in real-provider smoke checklist
 
