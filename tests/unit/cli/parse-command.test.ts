@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { parseCommand } from "../../../src/cli/parse-command.js";
 
 describe("parseCommand", () => {
-  test.each(["setup", "doctor", "start"] as const)(
+  test.each(["setup", "onboarding", "doctor", "start"] as const)(
     "parses the %s command exactly",
     (name) => {
       expect(parseCommand([name])).toEqual({ name });
