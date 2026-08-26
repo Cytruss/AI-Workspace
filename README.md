@@ -14,7 +14,7 @@ This guide does not promise a free test. A provider execution can consume paid u
 
 ## What you need before setup
 
-On Windows, install Node.js 22 or later, pnpm 11, and Git. Clone this repository into a working folder, open PowerShell in that folder, then install its dependencies:
+On Windows, use Node.js 22, pnpm 11, and Git. Node 22 is the CI-tested application runtime and the preferred first-install path. Clone this repository into a working folder, open PowerShell in that folder, then install its dependencies:
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -48,7 +48,7 @@ Use the official [Discord Developer Portal](https://discord.com/developers/appli
 3. Open the application's **Bot** page. Create or confirm the bot user, then ensure **Public Bot** is disabled. A non-public bot can be added only by its owner. Do not enable privileged gateway intents: this application uses only the standard guild intent.
 4. Still on **Bot**, use the portal control for the bot token only when you are ready to run local setup. Treat the token like a password. Do not put a value in source control, a command line, a screenshot, or a support request.
 5. Open **Installation**. Under **Default Install Settings**, configure **Guild Install**. Add exactly these OAuth2 scopes: `bot` and `applications.commands`. If your portal account still shows **OAuth2** > **URL Generator**, make the same two scope choices there; Discord's current documentation calls the equivalent setup **Installation**.
-6. When selecting `bot`, choose the smallest permissions useful in the intended channel: **View Channel**, **Send Messages**, and **Use Application Commands** (sometimes labelled **Use Slash Commands**). Restrict the bot to the intended channel with that channel's permission overrides rather than granting broad server access. AI Workspace does not subscribe to general message-content events; it receives its slash-command interactions. It does not need administrator, member, role-management, voice, or privileged-intent permissions.
+6. When selecting `bot`, grant only the permissions it needs in the intended channel: **View Channel**, **Send Messages**, and **Attach Files**. Give the authorized human operator role or user—not the bot—**Use Application Commands** (sometimes labelled **Use Slash Commands**). Restrict the bot to the intended channel with that channel's permission overrides rather than granting broad server access. AI Workspace does not subscribe to general message-content events; it receives its slash-command interactions. It does not need administrator, member, role-management, voice, or privileged-intent permissions.
 7. Copy the generated install link, open it yourself, select only the private server you control, and complete the install prompt. Do not publish the link or install the bot into a shared or public guild.
 
 ### Collect the three identifiers without publishing them
@@ -156,12 +156,12 @@ After the first request, inspect the selected project yourself with `git status 
 | --- | --- | --- |
 | Setup rejects a command ending in `.cmd` or `.bat` | The application intentionally refuses Windows shims. | Locate or install the provider's native `.exe`; do not rename or wrap the shim. |
 | Setup cannot find a provider executable | The CLI is not installed or no native executable is available. | Complete the provider's official installation, verify `--version`, then enter the native path in setup. Sign-in is verified only by an opt-in provider request. |
-| The bot is online but commands do not appear | The bot may not be installed into the selected guild, its application ID/guild allowlist may be wrong, or channel permissions may block it. | Check the Developer Portal **Installation** settings, private-guild install, and intended-channel View/Send/Application-Commands permissions. |
+| The bot is online but commands do not appear | The bot may not be installed into the selected guild, its application ID/guild allowlist may be wrong, or channel permissions may block it. | Check the Developer Portal **Installation** settings and private-guild install. In the intended channel, grant the bot View Channel, Send Messages, and Attach Files; grant the authorized human operator Use Application Commands. |
 | A command says the server or user is not authorized | The guild ID or user ID was not included at setup. | Recopy the ID with Developer Mode and rerun setup; do not send the ID in public support channels. |
 | `/ask` says no active project is selected | `/switch` has not been run for this guild/channel/user. | Run `/projects`, then `/switch project:<YOUR_PROJECT_ID>`. |
 | Doctor says a model or effort contract is unavailable | A configured selection does not match provider capabilities or observed-model policy. | For Codex, leave every model selection and its default blank. For Claude, use an allowed configured class or leave its selections blank for the provider default; do not weaken persisted evidence. |
 | A provider result is partial, failed, or cancelled | A provider, authentication, network, timeout, safety contract, or cancellation interrupted work. | Use `/status` for the persisted record, fix the reported local condition, then issue a new read-only request. |
-| Installation or a quality command cannot build the native database dependency on Windows | The machine lacks a compatible native build prerequisite or runtime combination. | Install the documented Windows C++ build prerequisites or use the supported Node runtime; do not change package or CI configuration merely to bypass the failure. |
+| Installation or a quality command cannot build the native database dependency on Windows | A later Node major may require a native source build. | Use Node.js 22 first: it is the CI-tested application runtime and preferred first-install path. If a source build is still required, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the [Desktop development with C++](https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools?view=vs-2022) workload. Do not change package or CI configuration merely to bypass the failure. |
 
 ## macOS and Linux notes
 
