@@ -176,34 +176,30 @@ describe("resolveAgentCommand", () => {
     ).resolves.toMatchObject({ source: "unresolved" });
   });
 
-  test("does not accept non-native paths or failed direct version probes", async () => {
+  test("rejects Windows command shims without probing them", async () => {
     const directory = join(
       tmpdir(),
       `ai-workspace-invalid-${String(Date.now())}`,
     );
     await mkdir(directory, { recursive: true });
-    const shim = join(directory, "claude.cmd");
-    await writeFile(shim, "shim");
+    for (const extension of ["cmd", "bat"]) {
+      const shim = join(directory, `claude.${extension}`);
+      await writeFile(shim, "shim");
+      const requests: ProcessRequest[] = [];
 
-    const resolution = await resolveAgentCommand({
-      provider: "claude",
-      configuredCommand: shim,
-      platform: "win32",
-      env: { PATH: directory },
-      runProcess: (): Promise<ProcessResult> =>
-        Promise.resolve({
-          exitCode: 1,
-          signal: null,
-          stdout: "",
-          stderr: "failed",
-          durationMs: 1,
-          termination: "exit",
-        }),
-    });
+      const resolution = await resolveAgentCommand({
+        provider: "claude",
+        configuredCommand: shim,
+        platform: "win32",
+        env: { PATH: directory },
+        runProcess: successfulProbe(requests),
+      });
 
-    expect(resolution).toMatchObject({ source: "unresolved" });
-    expect(resolution).not.toHaveProperty("command");
-    expect(resolution.diagnostic).toContain(".cmd");
+      expect(resolution).toMatchObject({ source: "unresolved" });
+      expect(resolution).not.toHaveProperty("command");
+      expect(resolution.diagnostic).toContain(`.${extension}`);
+      expect(requests).toHaveLength(0);
+    }
   });
 
   test("rejects a directory, a nonexecutable Unix file, and a failed native probe", async () => {

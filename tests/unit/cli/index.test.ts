@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   runDoctor: vi.fn().mockResolvedValue(true),
   runOnboarding: vi.fn().mockResolvedValue(undefined),
   loadConfig: vi.fn().mockResolvedValue({ marker: "configuration" }),
+  loadEnvironment: vi.fn(),
   parseCommand: vi.fn(() => ({ name: "doctor" })),
   getAppPaths: vi.fn(() => ({
     configFile: "C:/Users/private/ai-workspace/config.json",
@@ -28,7 +29,7 @@ vi.mock("../../../src/config/app-paths.js", () => ({
 vi.mock("../../../src/config/load-config.js", () => ({
   loadConfig: mocks.loadConfig,
 }));
-vi.mock("dotenv", () => ({ config: vi.fn() }));
+vi.mock("dotenv", () => ({ config: mocks.loadEnvironment }));
 
 const originalArgv = process.argv;
 process.argv = ["node", "src/index.ts", "doctor"];
@@ -55,7 +56,7 @@ describe("CLI entrypoint", () => {
     });
   });
 
-  test("runs onboarding with the application paths", async () => {
+  test("dispatches onboarding before loading dotenv or configuration", async () => {
     mocks.parseCommand.mockReturnValue({ name: "onboarding" });
 
     await import("../../../src/index.js");
@@ -66,5 +67,7 @@ describe("CLI entrypoint", () => {
         databaseFile: "C:/Users/private/ai-workspace/data.sqlite",
       });
     });
+    expect(mocks.loadEnvironment).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
   });
 });
