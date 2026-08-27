@@ -104,7 +104,7 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
         "--ignore-rules",
         "--json",
         "--config",
-        'default_permissions=":read-only"',
+        'permission_profile=":read-only"',
         "-C",
         process.cwd(),
         "--output-schema",

@@ -447,7 +447,7 @@ describe("dual-agent vertical slice", () => {
         expect(call.args).toEqual(
           expect.arrayContaining([
             "--config",
-            'default_permissions=":read-only"',
+            'permission_profile=":read-only"',
           ]),
         );
         expect(call.args).not.toContain("--model");

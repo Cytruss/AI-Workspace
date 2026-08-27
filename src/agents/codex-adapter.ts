@@ -38,7 +38,7 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
     "--ignore-rules",
     "--json",
     "--config",
-    'default_permissions=":read-only"',
+    'permission_profile=":read-only"',
     "-C",
     options.projectRoot,
     "--output-schema",
