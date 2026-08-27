@@ -67,6 +67,7 @@ Use the official [Discord Developer Portal](https://discord.com/developers/appli
    ```
 
    `permissions=35840` requests only **View Channel**, **Send Messages**, and **Attach Files**. `integration_type=0` is Guild Install; `guild_id` plus `disable_guild_select=true` keeps the dialog pointed at that one private server. A non-public bot can be added only by its owner, who must also have permission to add apps to the selected server.
+
 7. After the bot is present in the server, restrict it to the intended channel with that channel's permission overrides. Give the authorized human operator role or user—not the bot—**Use Application Commands** (sometimes labelled **Use Slash Commands**). AI Workspace does not subscribe to general message-content events; it receives its slash-command interactions. It does not need administrator, member, role-management, voice, or privileged-intent permissions.
 8. Complete the invite only for the private server you control. Do not publish the manual URL or install the bot into a shared or public guild.
 
