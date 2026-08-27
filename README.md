@@ -59,9 +59,17 @@ Use the official [Discord Developer Portal](https://discord.com/developers/appli
 2. On **General Information**, copy the **Application ID**. Keep it private; use only a placeholder such as `<DISCORD_APPLICATION_ID>` in notes or tickets.
 3. Open the application's **Bot** page. Create or confirm the bot user, then ensure **Public Bot** is disabled. A non-public bot can be added only by its owner. Do not enable privileged gateway intents: this application uses only the standard guild intent.
 4. Still on **Bot**, use the portal control for the bot token only when you are ready to run local setup. Treat the token like a password. Do not put a value in source control, a command line, a screenshot, or a support request.
-5. Open **Installation**. Under **Default Install Settings**, configure **Guild Install**. Add exactly these OAuth2 scopes: `bot` and `applications.commands`. If your portal account still shows **OAuth2** > **URL Generator**, make the same two scope choices there; Discord's current documentation calls the equivalent setup **Installation**.
-6. When selecting `bot`, grant only the permissions it needs in the intended channel: **View Channel**, **Send Messages**, and **Attach Files**. Give the authorized human operator role or user—not the bot—**Use Application Commands** (sometimes labelled **Use Slash Commands**). Restrict the bot to the intended channel with that channel's permission overrides rather than granting broad server access. AI Workspace does not subscribe to general message-content events; it receives its slash-command interactions. It does not need administrator, member, role-management, voice, or privileged-intent permissions.
-7. Copy the generated install link, open it yourself, select only the private server you control, and complete the install prompt. Do not publish the link or install the bot into a shared or public guild.
+5. Open **Installation**. Because this is a private bot, set **Install Link** (sometimes labelled **Default Authorization Link**) to **None**, then save. Discord rejects a private app with a default authorization link; **None** is the intended private-app setting. It also hides **Default Install Settings**, so do not switch the app to public just to expose those controls. See Discord's [install-link reference](https://docs.discord.com/developers/resources/application#install-links) for the distinction between a default link and a manually created OAuth2 invitation.
+6. Create a **guild-only** invitation instead. If your portal still offers **OAuth2** > **URL Generator**, select exactly `bot` and `applications.commands`. Otherwise, replace the two placeholders in this private, single-guild URL and open it yourself:
+
+   ```text
+   https://discord.com/oauth2/authorize?client_id=<DISCORD_APPLICATION_ID>&scope=bot%20applications.commands&permissions=35840&integration_type=0&guild_id=<GUILD_ID>&disable_guild_select=true
+   ```
+
+   `permissions=35840` requests only **View Channel**, **Send Messages**, and **Attach Files**. `integration_type=0` is Guild Install; `guild_id` plus `disable_guild_select=true` keeps the dialog pointed at that one private server. A non-public bot can be added only by its owner, who must also have permission to add apps to the selected server.
+
+7. After the bot is present in the server, restrict it to the intended channel with that channel's permission overrides. Give the authorized human operator role or user—not the bot—**Use Application Commands** (sometimes labelled **Use Slash Commands**). AI Workspace does not subscribe to general message-content events; it receives its slash-command interactions. It does not need administrator, member, role-management, voice, or privileged-intent permissions.
+8. Complete the invite only for the private server you control. Do not publish the manual URL or install the bot into a shared or public guild.
 
 ### Collect the three identifiers without publishing them
 
