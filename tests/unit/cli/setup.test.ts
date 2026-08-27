@@ -30,7 +30,8 @@ function setupIo(
     io: {
       ask: () => {
         const answer = answers.shift();
-        if (answer === undefined) throw new Error("Unexpected setup prompt");
+        if (answer === undefined)
+          return Promise.reject(new Error("Unexpected setup prompt"));
         return Promise.resolve(answer);
       },
       readSecret: () => Promise.resolve(token),
@@ -69,6 +70,16 @@ function setupDependencies(): {
     environmentLines,
   };
 }
+
+describe("setup IO", () => {
+  test("rejects asynchronously when scripted answers are exhausted", async () => {
+    const { io } = setupIo([]);
+
+    await expect(io.ask("Discord application ID: ")).rejects.toThrow(
+      "Unexpected setup prompt",
+    );
+  });
+});
 
 const initialAnswers = [
   "application-id",
