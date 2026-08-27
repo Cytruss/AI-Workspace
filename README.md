@@ -20,10 +20,17 @@ On Windows, use Node.js 22, pnpm 11, and Git. Node 22 is the CI-tested applicati
 pnpm install --frozen-lockfile
 ```
 
-Choose one Windows setup path:
+### Recommended Windows setup: run `pnpm onboarding`
 
-- Follow the [manual Windows setup guide](docs/guides/windows-manual-setup.md) to control every step yourself.
-- Run `pnpm onboarding` for a local Guided or consented Semi-automatic walkthrough.
+**New to AI Workspace on Windows? Start with the local onboarding walkthrough.** From the repository folder, run:
+
+```powershell
+pnpm onboarding
+```
+
+It checks the local prerequisites, explains what it finds, and leads you through the safest next step. Choose **Guided** when you want to make every machine change yourself. **Semi-automatic** is available only on Windows and asks for separate consent before every allowed prerequisite action; it never runs a shell command or silently installs software. In either mode, setup shows a redacted review of your configuration before it writes local files.
+
+If you prefer to control every step manually instead, follow the [manual Windows setup guide](docs/guides/windows-manual-setup.md).
 
 You also need:
 
@@ -141,17 +148,149 @@ Only after you deliberately accept the provider-cost boundary, start the bot fro
 pnpm start
 ```
 
-The process registers these slash commands in every configured private guild, then logs in as the bot. Open the intended channel in an authorized guild while signed in as an authorized user. Each example below is read-only with respect to the selected Git project, but `/ask` and `/debate` can call providers and may incur cost.
+The process registers these slash commands in every configured private guild, then logs in as the bot. Open the intended channel in an authorized guild while signed in as an authorized user. Start with `/projects`, then `/switch`, before making your first provider request. Every command below is read-only with respect to the selected Git project, but `/ask` and `/debate` can call providers and may incur cost. The examples use placeholders such as `<SESSION_ID>`; your bot returns real IDs and report text.
 
-| Discord command                                                                              | What it does                                                                                             | Expected result                                                                                                                                                                                                                 |
-| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/projects`                                                                                  | Lists the projects registered during setup.                                                              | A list in `project-id: project name` form, or a notice that none are registered.                                                                                                                                                |
-| `/models`                                                                                    | Lists configured model classes and defaults for Codex and Claude.                                        | The local selections/defaults only; it does not prove account availability.                                                                                                                                                     |
-| `/switch project:project-one`                                                                | Selects a registered project for your current guild, channel, and user.                                  | `Active project switched to project-one.` Replace `project-one` with your own registered project ID.                                                                                                                            |
-| `/ask agent:both question:Summarize the top-level project structure without changing files.` | Sends a read-only question to both providers for the active project.                                     | A completed, partial, failed, or cancelled persisted result. If no active project is set, it tells you to use `/switch` first.                                                                                                  |
-| `/debate topic:Which module deserves the next read-only review, and why?`                    | Has both providers deliberate using the active project (or an explicitly supplied registered `project`). | A bounded report with deterministic `CONSENSUS`, `DISAGREEMENT`, `REJECTED`, or `UNRESOLVED` verdict categories and separate evidence status. Evidence status verifies cited bytes and paths; it does not prove semantic truth. |
-| `/status`                                                                                    | Shows your active and recent sessions in this channel.                                                   | Active/recent session status, or a notice that no persisted sessions are available.                                                                                                                                             |
-| `/stop`                                                                                      | Cancels your current active run; `/stop run:<RUN_ID>` targets a specific current run.                    | `Stopping run …` when an active run owned by you is found, otherwise a no-matching-run notice.                                                                                                                                  |
+### Choose a model before you ask or debate
+
+Use `/models` to see the local model classes that setup made available. Discord shows those classes as pickers—not as free-form model-ID fields—on the relevant command:
+
+- `/ask` has `codex_model` and `claude_model`; choose the field for the provider you asked, or choose both when `agent:both`.
+- `/debate` has the same two optional pickers because it always uses both providers.
+- Select only a class displayed by `/models`. The selection is frozen in the resulting report along with its verification status.
+- With the current supported Windows setup, leave `codex_model` blank. Codex model IDs cannot yet be observed by the preflight, so configured Codex classes intentionally make doctor unhealthy. Use the provider default for Codex.
+- If `/models` lists a configured Claude class such as `sonnet`, you can choose it for an individual request. If it is not listed, leave the field blank for the provider default or rerun setup to change the local policy. A provider default is not model-verified or an entitlement guarantee.
+
+For example, choose `claude_model:sonnet` in Discord's command picker for a Claude-only request:
+
+```text
+/ask agent:claude question:Summarize the top-level project structure without changing files. claude_model:sonnet
+```
+
+Or keep Codex on its provider default while selecting Claude for a debate:
+
+```text
+/debate topic:Which module deserves the next read-only review, and why? claude_model:sonnet
+```
+
+### Commands and example replies
+
+#### `/projects` — find your registered project ID
+
+```text
+/projects
+
+Example reply
+project-one: My project
+```
+
+If setup did not register a project, the reply is `No projects are registered.`
+
+#### `/models` — see the choices that Discord can offer
+
+```text
+/models
+
+Example reply
+Configured model classes
+Codex: provider default (no configured class)
+Claude: sonnet (default)
+Observation policy: exact IDs and literal prefixes are accepted.
+Observed-model verification is not entitlement verification.
+```
+
+This is a local policy summary, not proof that an account can use a model.
+
+#### `/switch` — select the project for this channel and user
+
+```text
+/switch project:project-one
+
+Example reply
+Active project switched to project-one.
+```
+
+Run this before `/ask` unless you have already selected a project in this guild, channel, and user scope.
+
+#### `/ask` — request one read-only analysis
+
+```text
+/ask agent:both question:Summarize the top-level project structure without changing files. claude_model:sonnet
+
+Example reply
+Project: project-one
+Session: <SESSION_ID>
+Status: completed
+
+## Codex
+Status: completed
+Requested class: provider default
+Observed model IDs: none
+Verification: unverified
+Verification marker: unverified
+Provider-default execution was successful but cannot be model-verified.
+
+## Claude
+Status: completed
+Requested class: sonnet
+Requested CLI model ID: <CONFIGURED_CLAUDE_MODEL_ID>
+Observed model IDs: <OBSERVED_MODEL_ID>
+Verification: verified
+```
+
+The report can instead be `partial`, `failed`, or `cancelled`; use `/status` for its persisted record. Long reports are attached as a text file.
+
+#### `/debate` — ask both providers to deliberate
+
+```text
+/debate topic:Which module deserves the next read-only review, and why? claude_model:sonnet
+
+Example reply
+Project: project-one
+Session: <SESSION_ID>
+Status: completed
+Classification: CONSENSUS
+Frozen provider selections:
+Codex: provider default
+Claude: sonnet
+
+## CONSENSUS
+<CLAIM_ID>: <CLAIM_TEXT>
+Verdict: CONSENSUS; evidence: SUPPORTED
+```
+
+The full report also contains `DISAGREEMENT`, `REJECTED`, and `UNRESOLVED` sections, the two independent analyses, and mechanically resolved evidence/provenance. Evidence status verifies cited bytes and paths; it does not prove semantic truth. Add `project:project-one` only when you want to debate a registered project other than the active one.
+
+#### `/status` — check active and recent work
+
+```text
+/status
+
+Example reply
+# Active sessions
+None
+
+# Recent sessions
+Project: project-one
+Session: <SESSION_ID>
+Status: completed
+
+## Claude
+Status: completed
+Requested class: sonnet
+Observed model IDs: <OBSERVED_MODEL_ID>
+Verification: verified
+```
+
+#### `/stop` — cancel an active request you own
+
+```text
+/stop
+
+Example reply
+Stopping run <RUN_ID>.
+```
+
+Use `/stop run:<RUN_ID>` to target a specific current run. If no matching run belongs to you, the reply is `No matching active run is available to stop.`
 
 After the first request, inspect the selected project yourself with `git status --short`. For a cancellation exercise, begin a deliberately long **read-only** request, send `/stop`, confirm the cancellation in `/status`, and verify that Git status is unchanged. Do not treat this as proof of complete host isolation or a no-cost test.
 
