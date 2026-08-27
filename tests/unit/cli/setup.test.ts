@@ -28,12 +28,12 @@ function setupIo(
   const rendered: string[] = [];
   return {
     io: {
-      ask: async () => {
+      ask: () => {
         const answer = answers.shift();
         if (answer === undefined) throw new Error("Unexpected setup prompt");
-        return answer;
+        return Promise.resolve(answer);
       },
-      readSecret: async () => token,
+      readSecret: () => Promise.resolve(token),
       write: (line) => rendered.push(line),
     },
     rendered,
@@ -49,16 +49,20 @@ function setupDependencies(): {
   const environmentLines: string[] = [];
   return {
     dependencies: {
-      resolveAgentCommand: async ({ configuredCommand }) => ({
-        command: configuredCommand,
-        source: "configured",
-        diagnostic: "Configured native executable was verified with --version.",
-      }),
-      saveConfig: async (_configFile, config) => {
+      resolveAgentCommand: ({ configuredCommand }) =>
+        Promise.resolve({
+          command: configuredCommand,
+          source: "configured",
+          diagnostic:
+            "Configured native executable was verified with --version.",
+        }),
+      saveConfig: (_configFile, config) => {
         savedConfigs.push(config);
+        return Promise.resolve();
       },
-      writeEnvironmentFile: async (_envFile, line) => {
+      writeEnvironmentFile: (_envFile, line) => {
         environmentLines.push(line);
+        return Promise.resolve();
       },
     },
     savedConfigs,
