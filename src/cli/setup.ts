@@ -23,6 +23,29 @@ export interface SetupIo {
   write(line: string): void;
 }
 
+export class SetupCancelledError extends Error {
+  readonly code = "SETUP_CANCELLED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SetupCancelledError";
+  }
+}
+
+export function isSetupCancellation(error: unknown): boolean {
+  const legacyMessages = new Set([
+    "Setup cancelled",
+    "Setup cancelled before writing local files",
+    "Setup requires explicit confirmation for executable paths",
+  ]);
+  return (
+    error instanceof SetupCancelledError ||
+    (error instanceof Error &&
+      (("code" in error && error.code === "SETUP_CANCELLED") ||
+        legacyMessages.has(error.message)))
+  );
+}
+
 export interface SetupDependencies {
   resolveAgentCommand: typeof resolveAgentCommand;
   saveConfig: typeof saveConfig;
@@ -84,6 +107,10 @@ function parseModel(value: string): ModelSelection {
   };
 }
 
+function renderSetupReview(config: AppConfig): string {
+  return `Configuration review:\n${JSON.stringify(config, undefined, 2)}\nDiscord token: [REDACTED]\n`;
+}
+
 async function collectMany(io: SetupIo, prompt: string): Promise<string[]> {
   const values: string[] = [];
   for (;;) {
@@ -123,7 +150,7 @@ export async function readSecret(
           return;
         }
         if (character === "\u0003") {
-          fail(new Error("Setup cancelled"));
+          fail(new SetupCancelledError("Setup cancelled"));
           return;
         }
         if (character === "\b" || character === "\u007f")
@@ -182,7 +209,7 @@ export async function collectSetupDraft(
         )
       ).trim() !== "yes"
     )
-      throw new Error(
+      throw new SetupCancelledError(
         "Setup requires explicit confirmation for executable paths",
       );
     commands[provider] = resolution.command;
@@ -218,12 +245,13 @@ export async function collectSetupDraft(
       claude: { command: commands.claude, models: agentModels.claude },
     },
   });
+  io.write(renderSetupReview(config));
   if (
     (
       await io.ask("Create local configuration and .env now? (yes/no): ")
     ).trim() !== "yes"
   )
-    throw new Error("Setup cancelled before writing local files");
+    throw new SetupCancelledError("Setup cancelled before writing local files");
   return { config, token };
 }
 

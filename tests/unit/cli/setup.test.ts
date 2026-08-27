@@ -18,26 +18,41 @@ const paths: AppPaths = {
   logDir: "C:/Users/test/AppData/Roaming/ai-workspace/logs",
 };
 
+type SetupEvent =
+  | { kind: "ask"; text: string }
+  | { kind: "secret"; text: string }
+  | { kind: "write"; text: string };
+
 function setupIo(
   answers: string[],
   token = "secret-token",
 ): {
   io: SetupIo;
   rendered: string[];
+  events: SetupEvent[];
 } {
   const rendered: string[] = [];
+  const events: SetupEvent[] = [];
   return {
     io: {
-      ask: () => {
+      ask: (question) => {
+        events.push({ kind: "ask", text: question });
         const answer = answers.shift();
         if (answer === undefined)
           return Promise.reject(new Error("Unexpected setup prompt"));
         return Promise.resolve(answer);
       },
-      readSecret: () => Promise.resolve(token),
-      write: (line) => rendered.push(line),
+      readSecret: (prompt) => {
+        events.push({ kind: "secret", text: prompt });
+        return Promise.resolve(token);
+      },
+      write: (line) => {
+        events.push({ kind: "write", text: line });
+        rendered.push(line);
+      },
     },
     rendered,
+    events,
   };
 }
 
@@ -111,9 +126,37 @@ describe("readSecret", () => {
       "secret-token",
     );
   });
+
+  test("reports Ctrl+C with the stable setup cancellation code", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const reading = readSecret(input, output, "Discord token: ");
+    input.end("\u0003");
+
+    await expect(reading).rejects.toMatchObject({ code: "SETUP_CANCELLED" });
+  });
 });
 
 describe("setup draft persistence", () => {
+  test.each([
+    ["Codex executable confirmation", [...initialAnswers.slice(0, 6), "no"]],
+    ["Claude executable confirmation", [...initialAnswers.slice(0, 10), "no"]],
+    ["final write confirmation", [...initialAnswers, "no"]],
+  ])(
+    "marks a decline at %s as cancellation with no write",
+    async (_label, answers) => {
+      const { io } = setupIo(answers);
+      const { dependencies, savedConfigs, environmentLines } =
+        setupDependencies();
+
+      await expect(collectSetupDraft(io, dependencies)).rejects.toMatchObject({
+        code: "SETUP_CANCELLED",
+      });
+      expect(savedConfigs).toEqual([]);
+      expect(environmentLines).toEqual([]);
+    },
+  );
+
   test("declining final confirmation writes neither configuration nor environment", async () => {
     const { io } = setupIo([...initialAnswers, "no"]);
     const { dependencies, savedConfigs, environmentLines } =
@@ -128,12 +171,35 @@ describe("setup draft persistence", () => {
   });
 
   test("writes the completed setup draft and never renders its token", async () => {
-    const { io, rendered } = setupIo([...initialAnswers, "yes"]);
+    const { io, rendered, events } = setupIo([...initialAnswers, "yes"]);
     const { dependencies, savedConfigs, environmentLines } =
       setupDependencies();
 
     const draft = await collectSetupDraft(io, dependencies);
     await writeSetupDraft(draft, paths, "C:/setup-workspace", dependencies);
+
+    const review = rendered.find((line) =>
+      line.startsWith("Configuration review:\n"),
+    );
+    expect(review).toBeDefined();
+    const reviewPrefix = "Configuration review:\n";
+    const redactedSuffix = "\nDiscord token: [REDACTED]\n";
+    expect(review?.endsWith(redactedSuffix)).toBe(true);
+    const serializedConfig = review?.slice(
+      reviewPrefix.length,
+      -redactedSuffix.length,
+    );
+    expect(JSON.parse(serializedConfig ?? "null")).toEqual(draft.config);
+    const reviewIndex = events.findIndex(
+      (event) => event.kind === "write" && event.text === review,
+    );
+    const confirmationIndex = events.findIndex(
+      (event) =>
+        event.kind === "ask" &&
+        event.text === "Create local configuration and .env now? (yes/no): ",
+    );
+    expect(reviewIndex).toBeGreaterThanOrEqual(0);
+    expect(reviewIndex).toBeLessThan(confirmationIndex);
 
     expect(savedConfigs).toEqual([
       {

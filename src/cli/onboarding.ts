@@ -7,11 +7,13 @@ import { resolveAgentCommand } from "./resolve-agent-command.js";
 import { runDoctor } from "./doctor.js";
 import {
   collectSetupDraft,
+  isSetupCancellation,
   readSecret,
   writeSetupDraft,
   type SetupIo,
 } from "./setup.js";
 import {
+  createWindowsCommandRunner,
   inspectWindowsPrerequisites,
   installWindowsPrerequisite,
   type WindowsCommandRunner,
@@ -25,6 +27,7 @@ type AgentResolver = Parameters<typeof inspectWindowsPrerequisites>[1];
 export interface OnboardingDependencies {
   io: SetupIo;
   cwd: string;
+  platform: NodeJS.Platform;
   windowsRunner: WindowsCommandRunner;
   resolveAgentCommand: AgentResolver;
   inspectWindowsPrerequisites: typeof inspectWindowsPrerequisites;
@@ -60,31 +63,6 @@ const displayNames = {
   claude: "Claude",
   winget: "WinGet",
 } as const satisfies Record<WindowsPrerequisite, string>;
-
-function runWindowsCommand(
-  file: string,
-  args: readonly string[],
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(
-      file,
-      [...args],
-      { windowsHide: true },
-      (error, output, errorOutput) => {
-        resolve({
-          exitCode:
-            error === null
-              ? 0
-              : typeof error.code === "number"
-                ? error.code
-                : 1,
-          stdout: output,
-          stderr: errorOutput || error?.message || "",
-        });
-      },
-    );
-  });
-}
 
 function openOfficialUrl(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -124,7 +102,8 @@ function createProductionDependencies(): OnboardingDependencies {
   return {
     io,
     cwd: process.cwd(),
-    windowsRunner: runWindowsCommand,
+    platform: process.platform,
+    windowsRunner: createWindowsCommandRunner(),
     resolveAgentCommand,
     inspectWindowsPrerequisites,
     installWindowsPrerequisite,
@@ -296,6 +275,13 @@ async function runStateMachine(
   }
   let mode: OnboardingMode = selectedMode;
 
+  if (mode === "semi-automatic" && dependencies.platform !== "win32") {
+    io.write(
+      "Semi-automatic bootstrap actions are available only on Windows; continuing in Guided mode.\n",
+    );
+    mode = "guided";
+  }
+
   if (mode === "semi-automatic") {
     const bootstrapMode = await optionalBootstrap(dependencies, statuses);
     if (bootstrapMode === "cancelled") return cancelledResult();
@@ -349,17 +335,7 @@ async function runStateMachine(
     };
   }
 
-  let draft;
-  try {
-    draft = await dependencies.collectSetupDraft(io);
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message === "Setup cancelled before writing local files"
-    )
-      return cancelledResult();
-    throw error;
-  }
+  const draft = await dependencies.collectSetupDraft(io);
   await dependencies.writeSetupDraft(draft, paths, dependencies.cwd);
   const config = await dependencies.loadConfiguration(paths.configFile, {
     [draft.config.discord.tokenEnv]: draft.token,
@@ -395,7 +371,8 @@ export async function runOnboarding(
 ): Promise<OnboardingResult> {
   try {
     return await runStateMachine(paths, dependencies);
-  } catch {
+  } catch (error) {
+    if (isSetupCancellation(error)) return cancelledResult();
     return {
       stage: "failed",
       nextAction:

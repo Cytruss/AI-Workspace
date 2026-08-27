@@ -12,7 +12,9 @@ async function main(argv: readonly string[]): Promise<void> {
   const paths = getAppPaths();
   if (command.name === "setup") return runSetup(paths);
   if (command.name === "onboarding") {
-    await runOnboarding(paths);
+    const result = await runOnboarding(paths);
+    console.log(result.nextAction);
+    if (result.stage === "failed") process.exitCode = 1;
     return;
   }
   if (command.name === "start") return startApplication();

@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
+  createWindowsCommandRunner,
   inspectWindowsPrerequisites,
   installWindowsPrerequisite,
   type WindowsCommandRunner,
@@ -19,6 +20,79 @@ function result(
 ): Awaited<ReturnType<WindowsCommandRunner>> {
   return { exitCode, stdout, stderr };
 }
+
+describe("createWindowsCommandRunner", () => {
+  test("detects the invoking pnpm version without executing its Windows shim", async () => {
+    const executeFile = vi.fn(() => Promise.resolve(result(0)));
+    const runner = createWindowsCommandRunner({
+      platform: "win32",
+      nodeExecutable: "C:\\Node\\node.exe",
+      env: {
+        npm_config_user_agent: "pnpm/11.19.0 npm/? node/v22.23.2 win32 x64",
+      },
+      inspectFile: () => Promise.resolve(true),
+      executeFile,
+    });
+
+    await expect(runner("pnpm", ["--version"])).resolves.toEqual({
+      exitCode: 0,
+      stdout: "11.19.0\n",
+      stderr: "",
+    });
+    expect(executeFile).not.toHaveBeenCalled();
+  });
+
+  test("runs Corepack through verified node.exe and its regular JavaScript entry point", async () => {
+    const executeFile = vi.fn(() =>
+      Promise.resolve(result(0, "Corepack completed\n")),
+    );
+    const verifiedFiles = new Set([
+      "C:\\Node\\node.exe",
+      "C:\\Node\\node_modules\\corepack\\dist\\corepack.js",
+    ]);
+    const runner = createWindowsCommandRunner({
+      platform: "win32",
+      nodeExecutable: "C:\\Node\\node.exe",
+      env: {},
+      inspectFile: (file) => Promise.resolve(verifiedFiles.has(file)),
+      executeFile,
+    });
+
+    await expect(
+      runner("corepack", ["prepare", "pnpm@11.19.0", "--activate"]),
+    ).resolves.toEqual(result(0, "Corepack completed\n"));
+    expect(executeFile).toHaveBeenCalledWith(
+      "C:\\Node\\node.exe",
+      [
+        "C:\\Node\\node_modules\\corepack\\dist\\corepack.js",
+        "prepare",
+        "pnpm@11.19.0",
+        "--activate",
+      ],
+      {},
+    );
+  });
+
+  test.each(["pnpm", "C:\\Tools\\pnpm.cmd", "C:\\Tools\\pnpm.bat"])(
+    "returns an actionable manual route instead of executing unsafe target %s",
+    async (file) => {
+      const executeFile = vi.fn(() => Promise.resolve(result(0)));
+      const runner = createWindowsCommandRunner({
+        platform: "win32",
+        nodeExecutable: "C:\\Node\\node.exe",
+        env: {},
+        inspectFile: () => Promise.resolve(false),
+        executeFile,
+      });
+
+      const commandResult = await runner(file, ["--version"]);
+
+      expect(commandResult).toMatchObject({ exitCode: 1 });
+      expect(commandResult.stderr).toMatch(/manual|native|JavaScript/i);
+      expect(executeFile).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe("inspectWindowsPrerequisites", () => {
   test("reports missing tools, rejects a non-22 Node major, and retains shim diagnostics", async () => {
@@ -150,7 +224,8 @@ describe("installWindowsPrerequisite", () => {
     const runner: WindowsCommandRunner = (file, args) => {
       calls.push([file, args]);
       if (file === "node") return Promise.resolve(result(0, "v22.23.2\n"));
-      if (file === "pnpm") return Promise.resolve(result(0, "11.19.0\n"));
+      if (file === "corepack" && args[0] === "pnpm")
+        return Promise.resolve(result(0, "11.19.0\n"));
       return Promise.resolve(result(0));
     };
 
@@ -159,9 +234,32 @@ describe("installWindowsPrerequisite", () => {
     expect(calls).toEqual([
       ["node", ["--version"]],
       ["corepack", ["prepare", "pnpm@11.19.0", "--activate"]],
-      ["pnpm", ["--version"]],
+      ["corepack", ["pnpm", "--version"]],
     ]);
     expect(status).toMatchObject({ name: "pnpm", available: true });
+  });
+
+  test("returns an actionable pnpm status when the direct Corepack bootstrap fails", async () => {
+    const calls: CommandCall[] = [];
+    const runner: WindowsCommandRunner = (file, args) => {
+      calls.push([file, args]);
+      if (file === "node") return Promise.resolve(result(0, "v22.23.2\n"));
+      if (file === "corepack")
+        return Promise.resolve(result(1, "", "Corepack bootstrap failed"));
+      return Promise.resolve(result(0, "11.19.0\n"));
+    };
+
+    const status = await installWindowsPrerequisite("pnpm", runner);
+
+    expect(calls).toEqual([
+      ["node", ["--version"]],
+      ["corepack", ["prepare", "pnpm@11.19.0", "--activate"]],
+    ]);
+    expect(status).toEqual({
+      name: "pnpm",
+      available: false,
+      detail: "Corepack bootstrap failed",
+    });
   });
 
   test("does not invoke Corepack unless Node 22 is verified", async () => {

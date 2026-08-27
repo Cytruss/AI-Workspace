@@ -90,6 +90,7 @@ function fakeDependencies(
   events: Event[],
   prerequisiteStatuses: WindowsPrerequisiteStatus[],
   doctorHealthy = true,
+  platform: NodeJS.Platform = "win32",
 ) {
   const install = vi.fn((name: WindowsPrerequisiteStatus["name"]) =>
     Promise.resolve({
@@ -115,6 +116,7 @@ function fakeDependencies(
   const dependencies = {
     io,
     cwd: "C:/workspace",
+    platform,
     windowsRunner: vi.fn(() =>
       Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }),
     ),
@@ -204,9 +206,128 @@ describe("runOnboarding Guided mode", () => {
     expect(doctor).not.toHaveBeenCalled();
     expect(rendered.join("\n")).not.toContain(token);
   });
+
+  test.each([
+    {
+      label: "mode cancellation",
+      answers: ["cancel"],
+      unavailable: [],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "bootstrap cancellation",
+      answers: ["semi-automatic", "cancel"],
+      unavailable: ["node"],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "manual prerequisite page cancellation",
+      answers: ["guided", "cancel"],
+      unavailable: ["git"],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "provider page cancellation",
+      answers: ["guided", "cancel"],
+      unavailable: ["codex"],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "missing-prerequisite continuation cancellation",
+      answers: ["guided", "no", "cancel"],
+      unavailable: ["git"],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "Discord page cancellation",
+      answers: ["guided", "cancel"],
+      unavailable: [],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "Discord readiness cancellation after declining the optional page",
+      answers: ["guided", "no", "cancel"],
+      unavailable: [],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "declined bootstrap followed by manual cancellation",
+      answers: ["semi-automatic", "no", "cancel"],
+      unavailable: ["node"],
+      expectedStage: "cancelled",
+    },
+    {
+      label: "declined optional prerequisite page",
+      answers: ["guided", "no", "no"],
+      unavailable: ["git"],
+      expectedStage: "needs_operator_action",
+    },
+    {
+      label: "declined optional Discord page and unfinished manual tasks",
+      answers: ["guided", "no", "no"],
+      unavailable: [],
+      expectedStage: "needs_operator_action",
+    },
+  ] as const)(
+    "performs no write after $label",
+    async ({ answers, unavailable, expectedStage }) => {
+      const { io, events } = scriptedIo([...answers]);
+      const { dependencies, writeDraft, loadConfiguration, doctor } =
+        fakeDependencies(io, events, statuses([...unavailable]));
+
+      const result = await runOnboarding(paths, dependencies);
+
+      expect(result.stage).toBe(expectedStage);
+      expect(writeDraft).not.toHaveBeenCalled();
+      expect(loadConfiguration).not.toHaveBeenCalled();
+      expect(doctor).not.toHaveBeenCalled();
+    },
+  );
+
+  test("recognizes a coded setup cancellation without writing", async () => {
+    const { io, events } = scriptedIo(["guided", "no", "yes"]);
+    const { dependencies, collectDraft, writeDraft, doctor } = fakeDependencies(
+      io,
+      events,
+      statuses(),
+    );
+    collectDraft.mockRejectedValue(
+      Object.assign(new Error("Executable path was declined"), {
+        code: "SETUP_CANCELLED",
+      }),
+    );
+
+    const result = await runOnboarding(paths, dependencies);
+
+    expect(result.stage).toBe("cancelled");
+    expect(writeDraft).not.toHaveBeenCalled();
+    expect(doctor).not.toHaveBeenCalled();
+  });
 });
 
 describe("runOnboarding Semi-automatic mode", () => {
+  test("forces Guided mode and runs no installer outside Windows", async () => {
+    const { io, events, rendered } = scriptedIo([
+      "semi-automatic",
+      "yes",
+      "no",
+    ]);
+    const { dependencies, install, writeDraft } = fakeDependencies(
+      io,
+      events,
+      statuses(["node"]),
+      true,
+      "linux",
+    );
+
+    const result = await runOnboarding(paths, dependencies);
+
+    expect(result.stage).toBe("needs_operator_action");
+    expect(install).not.toHaveBeenCalled();
+    expect(writeDraft).not.toHaveBeenCalled();
+    expect(rendered.join("\n")).toMatch(/only on Windows.*Guided/i);
+  });
+
   test("shows each public action immediately before consent and falls back to Guided mode after a decline", async () => {
     const { io, events, rendered } = scriptedIo([
       "semi-automatic",

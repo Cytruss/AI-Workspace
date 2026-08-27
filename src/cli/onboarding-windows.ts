@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
+import { win32 } from "node:path";
 import type {
   AgentCommandResolution,
   ResolveAgentCommandOptions,
@@ -16,6 +19,22 @@ export type WindowsCommandRunner = (
   file: string,
   args: readonly string[],
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+type WindowsCommandResult = Awaited<ReturnType<WindowsCommandRunner>>;
+
+type WindowsProcessExecutor = (
+  file: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+) => Promise<WindowsCommandResult>;
+
+export interface WindowsCommandRunnerOptions {
+  platform?: NodeJS.Platform;
+  nodeExecutable?: string;
+  env?: NodeJS.ProcessEnv;
+  inspectFile?: (file: string) => Promise<boolean>;
+  executeFile?: WindowsProcessExecutor;
+}
 
 type WindowsAgentResolver = (
   options: Pick<ResolveAgentCommandOptions, "provider" | "configuredCommand">,
@@ -60,6 +79,111 @@ const installActions = {
     args: ["prepare", "pnpm@11.19.0", "--activate"],
   },
 } as const satisfies Record<InstallableWindowsPrerequisite, InstallAction>;
+
+function processFailure(error: unknown): WindowsCommandResult {
+  return {
+    exitCode:
+      error instanceof Error &&
+      "code" in error &&
+      typeof error.code === "number"
+        ? error.code
+        : 1,
+    stdout: "",
+    stderr:
+      error instanceof Error ? error.message : "Direct process launch failed.",
+  };
+}
+
+function executeFile(
+  file: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): Promise<WindowsCommandResult> {
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        file,
+        [...args],
+        { env, windowsHide: true },
+        (error, stdout, stderr) => {
+          resolve(
+            error === null
+              ? { exitCode: 0, stdout, stderr }
+              : {
+                  ...processFailure(error),
+                  stdout,
+                  stderr: stderr || error.message,
+                },
+          );
+        },
+      );
+    } catch (error) {
+      resolve(processFailure(error));
+    }
+  });
+}
+
+async function regularFile(file: string): Promise<boolean> {
+  try {
+    return (await stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function unavailableDirectTarget(detail: string): WindowsCommandResult {
+  return { exitCode: 1, stdout: "", stderr: detail };
+}
+
+function invokingPnpmVersion(env: NodeJS.ProcessEnv): string | undefined {
+  return /^pnpm\/([^\s]+)/.exec(env.npm_config_user_agent ?? "")?.[1];
+}
+
+export function createWindowsCommandRunner(
+  options: WindowsCommandRunnerOptions = {},
+): WindowsCommandRunner {
+  const platform = options.platform ?? process.platform;
+  const nodeExecutable = options.nodeExecutable ?? process.execPath;
+  const env = options.env ?? process.env;
+  const inspectFile = options.inspectFile ?? regularFile;
+  const runFile = options.executeFile ?? executeFile;
+
+  return async (file, args) => {
+    if (platform !== "win32") return runFile(file, args, env);
+    if (/\.(cmd|bat)$/i.test(file)) {
+      return unavailableDirectTarget(
+        "Windows .cmd and .bat shims cannot cross the direct-process boundary; use a native executable or the manual setup route.",
+      );
+    }
+    if (file === "pnpm") {
+      const version = invokingPnpmVersion(env);
+      return version === undefined
+        ? unavailableDirectTarget(
+            "pnpm could not be verified without executing a Windows command shim. Follow the manual Windows setup guide.",
+          )
+        : { exitCode: 0, stdout: `${version}\n`, stderr: "" };
+    }
+    if (file !== "corepack") return runFile(file, args, env);
+
+    const entryPoint = win32.join(
+      win32.dirname(nodeExecutable),
+      "node_modules",
+      "corepack",
+      "dist",
+      "corepack.js",
+    );
+    if (
+      !/\.exe$/i.test(nodeExecutable) ||
+      !(await inspectFile(nodeExecutable)) ||
+      !(await inspectFile(entryPoint))
+    ) {
+      return unavailableDirectTarget(
+        "A verified native node.exe and Corepack JavaScript entry point were not found. Follow the manual Windows setup guide.",
+      );
+    }
+    return runFile(nodeExecutable, [entryPoint, ...args], env);
+  };
+}
 
 function outputDetail(stdout: string, stderr: string): string {
   return stdout.trim() || stderr.trim();
@@ -185,11 +309,36 @@ export async function installWindowsPrerequisite(
       };
     }
     try {
-      await runner(installActions.pnpm.file, installActions.pnpm.args);
-    } catch {
-      // Detection below is authoritative and supplies the actionable status.
+      const action = await runner(
+        installActions.pnpm.file,
+        installActions.pnpm.args,
+      );
+      if (action.exitCode !== 0) {
+        return {
+          name: "pnpm",
+          available: false,
+          detail:
+            outputDetail(action.stdout, action.stderr) ||
+            "Corepack could not activate pnpm. Follow the manual Windows setup guide.",
+        };
+      }
+      const verification = await runner("corepack", ["pnpm", "--version"]);
+      return {
+        name: "pnpm",
+        available: verification.exitCode === 0,
+        detail:
+          outputDetail(verification.stdout, verification.stderr) ||
+          (verification.exitCode === 0
+            ? "pnpm is available."
+            : "pnpm could not be verified. Follow the manual Windows setup guide."),
+      };
+    } catch (error) {
+      return {
+        name: "pnpm",
+        available: false,
+        detail: `Corepack could not activate pnpm: ${error instanceof Error ? error.message : "direct process launch failed"}. Follow the manual Windows setup guide.`,
+      };
     }
-    return inspectCommand("pnpm", runner);
   }
   throw new Error(`Windows prerequisite "${name}" is not installable.`);
 }
