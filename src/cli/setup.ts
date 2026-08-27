@@ -12,6 +12,64 @@ import {
 import type { AppPaths } from "../config/app-paths.js";
 import { resolveAgentCommand } from "./resolve-agent-command.js";
 
+export interface SetupDraft {
+  config: AppConfig;
+  token: string;
+}
+
+export interface SetupIo {
+  ask(question: string): Promise<string>;
+  readSecret(prompt: string): Promise<string>;
+  write(line: string): void;
+}
+
+export class SetupCancelledError extends Error {
+  readonly code = "SETUP_CANCELLED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SetupCancelledError";
+  }
+}
+
+export function isSetupCancellation(error: unknown): boolean {
+  const legacyMessages = new Set([
+    "Setup cancelled",
+    "Setup cancelled before writing local files",
+    "Setup requires explicit confirmation for executable paths",
+  ]);
+  return (
+    error instanceof SetupCancelledError ||
+    (error instanceof Error &&
+      (("code" in error && error.code === "SETUP_CANCELLED") ||
+        legacyMessages.has(error.message)))
+  );
+}
+
+export interface SetupDependencies {
+  resolveAgentCommand: typeof resolveAgentCommand;
+  saveConfig: typeof saveConfig;
+  writeEnvironmentFile(envFile: string, line: string): Promise<void>;
+}
+
+async function writeEnvironmentFile(
+  envFile: string,
+  line: string,
+): Promise<void> {
+  await writeFile(envFile, line, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  if (process.platform !== "win32") await chmod(envFile, 0o600);
+}
+
+const productionDependencies: SetupDependencies = {
+  resolveAgentCommand,
+  saveConfig,
+  writeEnvironmentFile,
+};
+
 function splitRequired(value: string, label: string): string[] {
   const values = value
     .split(",")
@@ -49,13 +107,14 @@ function parseModel(value: string): ModelSelection {
   };
 }
 
-async function collectMany(
-  ask: (question: string) => Promise<string>,
-  prompt: string,
-): Promise<string[]> {
+function renderSetupReview(config: AppConfig): string {
+  return `Configuration review:\n${JSON.stringify(config, undefined, 2)}\nDiscord token: [REDACTED]\n`;
+}
+
+async function collectMany(io: SetupIo, prompt: string): Promise<string[]> {
   const values: string[] = [];
   for (;;) {
-    const value = (await ask(prompt)).trim();
+    const value = (await io.ask(prompt)).trim();
     if (!value) return values;
     values.push(value);
   }
@@ -91,7 +150,7 @@ export async function readSecret(
           return;
         }
         if (character === "\u0003") {
-          fail(new Error("Setup cancelled"));
+          fail(new SetupCancelledError("Setup cancelled"));
           return;
         }
         if (character === "\b" || character === "\u007f")
@@ -105,105 +164,125 @@ export async function readSecret(
   });
 }
 
+export async function collectSetupDraft(
+  io: SetupIo,
+  dependencies: SetupDependencies = productionDependencies,
+): Promise<SetupDraft> {
+  const applicationId = (await io.ask("Discord application ID: ")).trim();
+  const guildIds = splitRequired(
+    await io.ask("Discord guild IDs (comma-separated): "),
+    "Guild IDs",
+  );
+  const allowedUserIds = splitRequired(
+    await io.ask("Authorized user IDs (comma-separated): "),
+    "Authorized user IDs",
+  );
+  const projectEntries = await collectMany(
+    io,
+    "Project id|name|absolute-root (blank to finish): ",
+  );
+  const projects = projectEntries.map(parseProject);
+  await ProjectService.create(projects);
+  const agentModels = {} as Record<
+    "codex" | "claude",
+    { selections: ModelSelection[]; defaultModel?: string }
+  >;
+  const commands = {} as Record<"codex" | "claude", string>;
+  for (const provider of ["codex", "claude"] as const) {
+    io.write(
+      `${provider} optional examples: ${provider === "codex" ? "sol, terra, luna" : "opus, fable, sonnet, haiku"}. These are not entitlement claims.\n`,
+    );
+    const explicit = (
+      await io.ask(`${provider} native executable path (optional): `)
+    ).trim();
+    const resolution = await dependencies.resolveAgentCommand({
+      provider,
+      configuredCommand: explicit || provider,
+    });
+    if (resolution.command === undefined)
+      throw new Error(resolution.diagnostic);
+    io.write(`${provider}: ${resolution.source} native executable verified.\n`);
+    if (
+      (
+        await io.ask(
+          `Save this portable native executable path for ${provider}? (yes/no): `,
+        )
+      ).trim() !== "yes"
+    )
+      throw new SetupCancelledError(
+        "Setup requires explicit confirmation for executable paths",
+      );
+    commands[provider] = resolution.command;
+    const selections = (
+      await collectMany(
+        io,
+        `${provider} model class|CLI ID|effort?|exact observed IDs|prefixes (blank to finish): `,
+      )
+    ).map(parseModel);
+    const defaultModel = (
+      await io.ask(
+        `${provider} default model class (blank for provider default): `,
+      )
+    ).trim();
+    agentModels[provider] = {
+      selections,
+      ...(defaultModel ? { defaultModel } : {}),
+    };
+  }
+  const token = await io.readSecret("Discord token: ");
+  const config: AppConfig = AppConfigSchema.parse({
+    version: 1,
+    mode: "observe",
+    discord: {
+      applicationId,
+      guildIds,
+      allowedUserIds,
+      tokenEnv: "AI_WORKSPACE_DISCORD_TOKEN",
+    },
+    projects,
+    agents: {
+      codex: { command: commands.codex, models: agentModels.codex },
+      claude: { command: commands.claude, models: agentModels.claude },
+    },
+  });
+  io.write(renderSetupReview(config));
+  if (
+    (
+      await io.ask("Create local configuration and .env now? (yes/no): ")
+    ).trim() !== "yes"
+  )
+    throw new SetupCancelledError("Setup cancelled before writing local files");
+  return { config, token };
+}
+
+export async function writeSetupDraft(
+  draft: SetupDraft,
+  paths: AppPaths,
+  cwd: string,
+  dependencies: SetupDependencies = productionDependencies,
+): Promise<void> {
+  await dependencies.saveConfig(paths.configFile, draft.config);
+  await dependencies.writeEnvironmentFile(
+    resolve(cwd, ".env"),
+    `AI_WORKSPACE_DISCORD_TOKEN=${draft.token}\n`,
+  );
+}
+
 export async function runSetup(paths: AppPaths): Promise<void> {
   const terminal = createInterface({ input: stdin, output: stdout });
   try {
-    const ask = (question: string) => terminal.question(question);
-    const applicationId = (await ask("Discord application ID: ")).trim();
-    const guildIds = splitRequired(
-      await ask("Discord guild IDs (comma-separated): "),
-      "Guild IDs",
-    );
-    const allowedUserIds = splitRequired(
-      await ask("Authorized user IDs (comma-separated): "),
-      "Authorized user IDs",
-    );
-    const projectEntries = await collectMany(
-      ask,
-      "Project id|name|absolute-root (blank to finish): ",
-    );
-    const projects = projectEntries.map(parseProject);
-    await ProjectService.create(projects);
-    const agentModels = {} as Record<
-      "codex" | "claude",
-      { selections: ModelSelection[]; defaultModel?: string }
-    >;
-    const commands = {} as Record<"codex" | "claude", string>;
-    for (const provider of ["codex", "claude"] as const) {
-      stdout.write(
-        `${provider} optional examples: ${provider === "codex" ? "sol, terra, luna" : "opus, fable, sonnet, haiku"}. These are not entitlement claims.\n`,
-      );
-      const explicit = (
-        await ask(`${provider} native executable path (optional): `)
-      ).trim();
-      const resolution = await resolveAgentCommand({
-        provider,
-        configuredCommand: explicit || provider,
-      });
-      if (resolution.command === undefined)
-        throw new Error(resolution.diagnostic);
-      stdout.write(
-        `${provider}: ${resolution.source} native executable verified.\n`,
-      );
-      if (
-        (
-          await ask(
-            `Save this portable native executable path for ${provider}? (yes/no): `,
-          )
-        ).trim() !== "yes"
-      )
-        throw new Error(
-          "Setup requires explicit confirmation for executable paths",
-        );
-      commands[provider] = resolution.command;
-      const selections = (
-        await collectMany(
-          ask,
-          `${provider} model class|CLI ID|effort?|exact observed IDs|prefixes (blank to finish): `,
-        )
-      ).map(parseModel);
-      const defaultModel = (
-        await ask(
-          `${provider} default model class (blank for provider default): `,
-        )
-      ).trim();
-      agentModels[provider] = {
-        selections,
-        ...(defaultModel ? { defaultModel } : {}),
-      };
-    }
-    terminal.pause();
-    const token = await readSecret(stdin, stdout, "Discord token: ");
-    terminal.resume();
-    const config: AppConfig = AppConfigSchema.parse({
-      version: 1,
-      mode: "observe",
-      discord: {
-        applicationId,
-        guildIds,
-        allowedUserIds,
-        tokenEnv: "AI_WORKSPACE_DISCORD_TOKEN",
+    const io: SetupIo = {
+      ask: (question) => terminal.question(question),
+      readSecret: async (prompt) => {
+        terminal.pause();
+        const token = await readSecret(stdin, stdout, prompt);
+        terminal.resume();
+        return token;
       },
-      projects,
-      agents: {
-        codex: { command: commands.codex, models: agentModels.codex },
-        claude: { command: commands.claude, models: agentModels.claude },
-      },
-    });
-    if (
-      (
-        await ask("Create local configuration and .env now? (yes/no): ")
-      ).trim() !== "yes"
-    )
-      throw new Error("Setup cancelled before writing local files");
-    await saveConfig(paths.configFile, config);
-    const envFile = resolve(process.cwd(), ".env");
-    await writeFile(envFile, `AI_WORKSPACE_DISCORD_TOKEN=${token}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-    if (process.platform !== "win32") await chmod(envFile, 0o600);
+      write: (line) => stdout.write(line),
+    };
+    const draft = await collectSetupDraft(io);
+    await writeSetupDraft(draft, paths, process.cwd());
     stdout.write("Local configuration saved. Run pnpm run doctor next.\n");
   } finally {
     terminal.close();

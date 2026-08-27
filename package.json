@@ -17,6 +17,7 @@
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "setup": "tsx src/index.ts setup",
+    "onboarding": "tsx src/index.ts onboarding",
     "doctor": "tsx src/index.ts doctor",
     "start": "tsx src/index.ts start"
   },
