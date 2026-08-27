@@ -103,8 +103,8 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
         "--ignore-user-config",
         "--ignore-rules",
         "--json",
-        "--sandbox",
-        "read-only",
+        "--config",
+        'default_permissions=":read-only"',
         "-C",
         process.cwd(),
         "--output-schema",
@@ -147,6 +147,9 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
       ]),
     );
     expect(invoke?.args[schema + 1]).toContain('"phase"');
+    expect(JSON.parse(invoke?.args[schema + 1] ?? "{}")).toMatchObject({
+      $schema: "http://json-schema.org/draft-07/schema#",
+    });
     expect(invoke?.args).not.toEqual(
       expect.arrayContaining(["Bash", "Edit", "Write", "Notebook"]),
     );

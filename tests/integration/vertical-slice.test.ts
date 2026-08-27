@@ -445,10 +445,17 @@ describe("dual-agent vertical slice", () => {
       }
       for (const call of inferenceCalls(harness.codexCalls)) {
         expect(call.args).toEqual(
-          expect.arrayContaining(["--sandbox", "read-only"]),
+          expect.arrayContaining([
+            "--config",
+            'default_permissions=":read-only"',
+          ]),
         );
         expect(call.args).not.toContain("--model");
-        expect(call.args).not.toContain("--config");
+        expect(
+          call.args.some((argument) =>
+            argument.startsWith("model_reasoning_effort="),
+          ),
+        ).toBe(false);
         expect(call.command).not.toBe("cmd.exe");
       }
       for (const call of inferenceCalls(harness.claudeCalls)) {

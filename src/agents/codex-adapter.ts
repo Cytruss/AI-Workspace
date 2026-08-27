@@ -37,8 +37,8 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
     "--ignore-user-config",
     "--ignore-rules",
     "--json",
-    "--sandbox",
-    "read-only",
+    "--config",
+    'default_permissions=":read-only"',
     "-C",
     options.projectRoot,
     "--output-schema",
@@ -100,7 +100,6 @@ const CODEX_FLAGS = [
   "--ignore-rules",
   "--json",
   "--output-schema",
-  "--sandbox",
   "--model",
   "--config",
 ] as const;

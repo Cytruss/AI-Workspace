@@ -164,13 +164,8 @@ export class ClaudeAdapter implements AgentAdapter {
           `Unsupported Claude version; require ${CLAUDE_MINIMUM_HARDENED_VERSION} or later`,
         );
       requireHelpFlags(help.stdout, CLAUDE_FLAGS);
-      if (
-        !/(^|\s)(--print|-p)(?:\s|$)/m.test(help.stdout) ||
-        !/modelUsage/.test(help.stdout)
-      )
-        throw new Error(
-          "Missing required CLI capability: print mode or modelUsage",
-        );
+      if (!/(^|\s)(--print|-p)(?:\s|$)/m.test(help.stdout))
+        throw new Error("Missing required CLI capability: print mode");
       const effort = help.stdout
         .match(
           /--effort[^\n]*(?:values|one of)[: ]+([a-z]+(?:[|,][a-z]+)*)/i,
@@ -217,7 +212,9 @@ export class ClaudeAdapter implements AgentAdapter {
       return this.failed(request, 0, [
         "OBSERVE mode with a response schema is required",
       ]);
-    const schema = JSON.stringify(z.toJSONSchema(request.responseSchema));
+    const schema = JSON.stringify(
+      z.toJSONSchema(request.responseSchema, { target: "draft-07" }),
+    );
     if (Buffer.byteLength(schema, "utf8") > MAX_RESPONSE_SCHEMA_BYTES)
       return this.failed(request, 0, ["Response schema exceeds 32768 bytes"]);
     const before = await this.integrity(request.projectRoot);

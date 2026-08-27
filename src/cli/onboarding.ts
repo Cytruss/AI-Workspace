@@ -141,13 +141,10 @@ async function confirm(
 
 async function offerOfficialPage(
   dependencies: OnboardingDependencies,
-  label: string,
+  question: string,
   url: string,
 ): Promise<"continue" | "cancel"> {
-  const choice = await confirm(
-    dependencies.io,
-    `Open the official ${label} page? (yes/no/cancel): `,
-  );
+  const choice = await confirm(dependencies.io, question);
   if (choice === "cancel") return "cancel";
   if (choice === "yes") await dependencies.openOfficialUrl(url);
   return "continue";
@@ -211,7 +208,7 @@ async function presentManualPrerequisites(
     if (
       (await offerOfficialPage(
         dependencies,
-        displayNames[name],
+        `Open the official ${displayNames[name]} page? (yes/no/cancel): `,
         officialPages[name],
       )) === "cancel"
     )
@@ -233,7 +230,9 @@ async function presentProviderReadiness(
       statuses.find(({ name }) => name === provider)?.available === false &&
       (await offerOfficialPage(
         dependencies,
-        `${label} setup`,
+        provider === "codex"
+          ? "Open the official Codex documentation? Sign-in happens in the Codex CLI, not on this page. (yes/no/cancel): "
+          : `Open the official ${label} setup page? (yes/no/cancel): `,
         officialPages[provider],
       )) === "cancel"
     )
@@ -317,7 +316,7 @@ async function runStateMachine(
   if (
     (await offerOfficialPage(
       dependencies,
-      "Discord Developer Portal",
+      "Open the official Discord Developer Portal page? (yes/no/cancel): ",
       officialPages.discord,
     )) === "cancel"
   )

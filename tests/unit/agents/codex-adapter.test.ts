@@ -22,8 +22,8 @@ describe("Codex adapter arguments and JSONL parser", () => {
         "--ignore-user-config",
         "--ignore-rules",
         "--json",
-        "--sandbox",
-        "read-only",
+        "--config",
+        'default_permissions=":read-only"',
         "-C",
         "C:/project",
         "--output-schema",
@@ -40,8 +40,8 @@ describe("Codex adapter arguments and JSONL parser", () => {
         "--ignore-user-config",
         "--ignore-rules",
         "--json",
-        "--sandbox",
-        "read-only",
+        "--config",
+        'default_permissions=":read-only"',
         "-C",
         "C:/project",
         "--output-schema",
@@ -60,8 +60,8 @@ describe("Codex adapter arguments and JSONL parser", () => {
         "--ignore-user-config",
         "--ignore-rules",
         "--json",
-        "--sandbox",
-        "read-only",
+        "--config",
+        'default_permissions=":read-only"',
         "-C",
         "C:/project",
         "--output-schema",
@@ -169,7 +169,7 @@ describe("Codex adapter arguments and JSONL parser", () => {
   test("rejects a patch-only version below the compatibility floor", async () => {
     const outputs = [
       "0.75.999",
-      "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --sandbox --model --config -C",
+      "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C",
     ];
     const adapter = new CodexAdapter(
       {

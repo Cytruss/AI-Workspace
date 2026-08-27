@@ -207,6 +207,22 @@ describe("runOnboarding Guided mode", () => {
     expect(rendered.join("\n")).not.toContain(token);
   });
 
+  test("labels the optional Codex page as documentation, not sign-in", async () => {
+    const { io, events } = scriptedIo(["guided", "yes", "no"]);
+    const { dependencies } = fakeDependencies(io, events, statuses(["codex"]));
+
+    await runOnboarding(paths, dependencies);
+
+    expect(
+      events.find(
+        (event): event is Extract<Event, { kind: "ask" }> =>
+          event.kind === "ask" && event.text.includes("Codex"),
+      )?.text,
+    ).toBe(
+      "Open the official Codex documentation? Sign-in happens in the Codex CLI, not on this page. (yes/no/cancel): ",
+    );
+  });
+
   test.each([
     {
       label: "mode cancellation",
