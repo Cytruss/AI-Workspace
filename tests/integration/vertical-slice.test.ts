@@ -465,7 +465,7 @@ describe("dual-agent vertical slice", () => {
         expect(call.args[settingsIndex + 1]).toBe(CLAUDE_SETTINGS);
         expect(call.args).toEqual(
           expect.arrayContaining([
-            "--bare",
+            "--safe-mode",
             "--tools",
             "Read,Glob,Grep",
             "--disallowedTools",
@@ -632,7 +632,7 @@ describe("dual-agent vertical slice", () => {
       expect(invocation?.args).not.toContain("--effort");
       const settings = invocation?.args.indexOf("--settings") ?? -1;
       expect(invocation?.args[settings + 1]).toBe(CLAUDE_SETTINGS);
-      expect(invocation?.args).toContain("--bare");
+      expect(invocation?.args).toContain("--safe-mode");
     } finally {
       await harness.cleanup();
     }
@@ -702,7 +702,7 @@ describe("dual-agent vertical slice", () => {
       for (const call of inferenceCalls(harness.claudeCalls)) {
         const settings = call.args.indexOf("--settings");
         expect(call.args[settings + 1]).toBe(CLAUDE_SETTINGS);
-        expect(call.args).toContain("--bare");
+        expect(call.args).toContain("--safe-mode");
         expect(call.env.CLAUDE_CONFIG_DIR).toBeUndefined();
       }
     } finally {

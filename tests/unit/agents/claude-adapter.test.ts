@@ -15,7 +15,7 @@ const fixture = fileURLToPath(
 describe("Claude adapter arguments and JSON parser", () => {
   const schema = '{"type":"object","properties":{"phase":{"const":"initial"}}}';
   const safety = [
-    "--bare",
+    "--safe-mode",
     "--settings",
     CLAUDE_SETTINGS,
     "--tools",
@@ -94,7 +94,7 @@ describe("Claude adapter arguments and JSON parser", () => {
   test("rejects a patch-only version below the compatibility floor", async () => {
     const outputs = [
       "2.0.999",
-      "--bare --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage",
+      "--safe-mode --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage",
     ];
     const adapter = new ClaudeAdapter(
       {
@@ -123,7 +123,7 @@ describe("Claude adapter arguments and JSON parser", () => {
       "2.1.233 (Claude Code)",
       [
         "Usage: claude [options] [command] [prompt]",
-        "  --bare",
+        "  --safe-mode",
         "  --settings <json>",
         "  --tools <tools>",
         "  --disallowedTools <tools>",

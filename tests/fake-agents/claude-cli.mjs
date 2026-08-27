@@ -13,7 +13,7 @@ const stdin = await new Promise((resolve, reject) => {
 if (args[0] === "--version") process.stdout.write("2.1.233");
 else if (args.includes("--help"))
   process.stdout.write(
-    "--bare --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage --effort values: low|high",
+    "--safe-mode --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage --effort values: low|high",
   );
 else if (stdin === "HANG") setInterval(() => undefined, 1_000);
 else if (stdin === "OVERSIZE") process.stdout.write("x".repeat(8_192));

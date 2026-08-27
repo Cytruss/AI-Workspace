@@ -31,7 +31,7 @@ export interface ClaudeArgumentOptions {
 
 export function buildClaudeArguments(options: ClaudeArgumentOptions): string[] {
   const args = [
-    "--bare",
+    "--safe-mode",
     "--settings",
     CLAUDE_SETTINGS,
     "--tools",
@@ -79,7 +79,7 @@ export const CLAUDE_MINIMUM_HARDENED_VERSION = "2.1.233";
 const PROBE_TIMEOUT_MS = 10_000;
 const PROBE_MAX_OUTPUT_BYTES = 256 * 1024;
 const CLAUDE_FLAGS = [
-  "--bare",
+  "--safe-mode",
   "--settings",
   "--tools",
   "--disallowedTools",

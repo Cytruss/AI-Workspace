@@ -135,7 +135,7 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
     expect(invoke?.args[settings + 1]).toBe(CLAUDE_SETTINGS);
     expect(invoke?.args).toEqual(
       expect.arrayContaining([
-        "--bare",
+        "--safe-mode",
         "--tools",
         "Read,Glob,Grep",
         "--disallowedTools",
