@@ -42,6 +42,7 @@ function isPrivateIpv4(address: string): boolean {
     (first === 192 && second === 168) ||
     (first === 192 && second === 0) ||
     (first === 192 && second === 2) ||
+    (first === 192 && second === 88 && parts[2] === 99) ||
     (first === 198 && (second === 18 || second === 19 || second === 51)) ||
     (first === 203 && second === 0)
   );
@@ -62,8 +63,22 @@ function isPrivateIpv6(address: string): boolean {
     normalized.startsWith("2001:db8")
   )
     return true;
-  const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  return mapped?.[1] === undefined ? false : isPrivateIpv4(mapped[1]);
+  const dottedMapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (dottedMapped?.[1] !== undefined) return isPrivateIpv4(dottedMapped[1]);
+  const hexadecimalMapped = normalized.match(
+    /^::ffff:([0-9a-f]+):([0-9a-f]+)$/,
+  );
+  if (
+    hexadecimalMapped?.[1] === undefined ||
+    hexadecimalMapped[2] === undefined
+  )
+    return false;
+  const high = Number.parseInt(hexadecimalMapped[1], 16);
+  const low = Number.parseInt(hexadecimalMapped[2], 16);
+  if (!Number.isInteger(high) || !Number.isInteger(low)) return true;
+  return isPrivateIpv4(
+    [high >>> 8, high & 0xff, low >>> 8, low & 0xff].join("."),
+  );
 }
 
 function isPublicAddress(address: string): boolean {
@@ -88,7 +103,16 @@ async function resolvePublicHost(hostname: string): Promise<readonly string[]> {
 
 function isLocalHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/\.$/, "");
-  return normalized === "localhost" || !normalized.includes(".");
+  return (
+    normalized === "localhost" ||
+    (isIP(normalized) === 0 && !normalized.includes("."))
+  );
+}
+
+function hostnameForLookup(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
 }
 
 function canonicalize(value: URL): ValidatedReviewUrl {
@@ -137,11 +161,12 @@ export class UrlPolicy {
     } catch {
       throw new SiteReviewError("SITE_URL_INVALID", "URL is invalid");
     }
+    const hostname = hostnameForLookup(parsed.hostname);
     if (
       (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
       parsed.username !== "" ||
       parsed.password !== "" ||
-      isLocalHostname(parsed.hostname)
+      isLocalHostname(hostname)
     ) {
       throw new SiteReviewError(
         blockedCode,
@@ -151,9 +176,7 @@ export class UrlPolicy {
     let addresses: readonly string[];
     try {
       addresses =
-        isIP(parsed.hostname) === 0
-          ? await this.resolveHost(parsed.hostname)
-          : [parsed.hostname];
+        isIP(hostname) === 0 ? await this.resolveHost(hostname) : [hostname];
     } catch {
       throw new SiteReviewError(blockedCode, "URL host could not be verified");
     }
