@@ -96,6 +96,30 @@ describe("Discord response formatting", () => {
     );
   });
 
+  test("renders fenced top-level listings as readable bullets", () => {
+    const payload = formatAskReport({
+      sessionId: "session-listing",
+      status: "completed",
+      project: { id: "demo", name: "Demo", root: "unused" },
+      results: [
+        {
+          agentId: "codex",
+          status: "completed",
+          durationMs: 1,
+          diagnostics: [],
+          response:
+            "Top-level contents:\n\n```text\n.editorconfig\n.git/\nsrc/\npackage.json\n```",
+          modelExecution: { observedModelIds: [], verification: "unverified" },
+        },
+      ],
+    });
+    expect(payload.content).toContain("- .editorconfig");
+    expect(payload.content).toContain("- .git/");
+    expect(payload.content).toContain("- src/");
+    expect(payload.content).toContain("- package.json");
+    expect(payload.content).not.toContain("```text");
+  });
+
   test("withholds content for an explicit selection that failed verification", () => {
     const payload = formatAskReport({
       sessionId: "session-explicit-unverified",

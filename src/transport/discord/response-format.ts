@@ -101,6 +101,21 @@ export function formatModels(models: ProviderModels): DiscordPayload {
   );
 }
 
+function formatReadOnlyListing(content: string): string {
+  return content.replace(
+    /```text\r?\n([\s\S]*?)\r?\n```/g,
+    (block: string, body: string): string => {
+      const entries = body
+        .split(/\r?\n/)
+        .filter((entry: string) => entry !== "");
+      return entries.length > 0 &&
+        entries.every((entry: string) => !/\s/.test(entry))
+        ? entries.map((entry: string) => `- ${entry}`).join("\n")
+        : block;
+    },
+  );
+}
+
 export function formatAskReport(report: AskReport): DiscordPayload {
   const lines = [
     `Project: ${report.project.id}`,
@@ -121,7 +136,7 @@ export function formatAskReport(report: AskReport): DiscordPayload {
     const diagnostic = safeFailure(result);
     if (diagnostic !== undefined) lines.push(diagnostic);
     if (result.response !== undefined && safeFailure(result) === undefined)
-      lines.push("", result.response);
+      lines.push("", formatReadOnlyListing(result.response));
   }
   return payload(lines.join("\n"), `ask-${report.sessionId}.txt`);
 }
