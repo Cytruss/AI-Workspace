@@ -120,6 +120,29 @@ describe("Discord response formatting", () => {
     expect(payload.content).not.toContain("```text");
   });
 
+  test("unwraps serialized ask content into Discord line breaks", () => {
+    const payload = formatAskReport({
+      sessionId: "session-serialized",
+      status: "completed",
+      project: { id: "demo", name: "Demo", root: "unused" },
+      results: [
+        {
+          agentId: "codex",
+          status: "completed",
+          durationMs: 1,
+          diagnostics: [],
+          response:
+            '{"phase":"ask","content":"Top-level folders:\\n\\n- `.git`\\n- `src`"}',
+          modelExecution: { observedModelIds: [], verification: "unverified" },
+        },
+      ],
+    });
+    expect(payload.content).toContain(
+      "Top-level folders:\n\n- `.git`\n- `src`",
+    );
+    expect(payload.content).not.toContain('{"phase":"ask"');
+  });
+
   test("withholds content for an explicit selection that failed verification", () => {
     const payload = formatAskReport({
       sessionId: "session-explicit-unverified",

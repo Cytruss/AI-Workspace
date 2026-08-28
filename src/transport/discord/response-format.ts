@@ -116,6 +116,24 @@ function formatReadOnlyListing(content: string): string {
   );
 }
 
+function unwrapAskContent(response: string): string {
+  try {
+    const parsed: unknown = JSON.parse(response);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "phase" in parsed &&
+      "content" in parsed &&
+      parsed.phase === "ask" &&
+      typeof parsed.content === "string"
+    )
+      return parsed.content;
+  } catch {
+    // Ordinary plain-text agent replies are not JSON.
+  }
+  return response;
+}
+
 export function formatAskReport(report: AskReport): DiscordPayload {
   const lines = [
     `Project: ${report.project.id}`,
@@ -136,7 +154,7 @@ export function formatAskReport(report: AskReport): DiscordPayload {
     const diagnostic = safeFailure(result);
     if (diagnostic !== undefined) lines.push(diagnostic);
     if (result.response !== undefined && safeFailure(result) === undefined)
-      lines.push("", formatReadOnlyListing(result.response));
+      lines.push("", formatReadOnlyListing(unwrapAskContent(result.response)));
   }
   return payload(lines.join("\n"), `ask-${report.sessionId}.txt`);
 }
