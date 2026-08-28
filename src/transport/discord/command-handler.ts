@@ -13,7 +13,7 @@ import type {
 import { authorize, DiscordAuthorizationError } from "./authorization.js";
 import {
   formatAskReport,
-  formatDebateReport,
+  formatDebateReportParts,
   formatModels,
   formatStatusOverview,
   type DiscordPayload,
@@ -32,6 +32,7 @@ export interface InteractionPort {
   deferReply(): Promise<void>;
   reply(content: DiscordPayload): Promise<void>;
   editReply(content: DiscordPayload): Promise<void>;
+  followUp(content: DiscordPayload): Promise<void>;
 }
 
 interface ProjectPort {
@@ -94,6 +95,16 @@ class DiscordCommandError extends Error {
 
 function message(content: string): DiscordPayload {
   return { content };
+}
+
+async function deliverDebateReport(
+  port: InteractionPort,
+  report: DebateReport,
+  runs: readonly AgentRunRecord[],
+): Promise<void> {
+  const [first, ...followUps] = formatDebateReportParts(report, runs);
+  await port.editReply(first as DiscordPayload);
+  for (const followUp of followUps) await port.followUp(followUp);
 }
 
 function requestedModel(
@@ -279,11 +290,10 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
           port.interactionId,
         );
         if (replay !== undefined) {
-          await port.editReply(
-            formatDebateReport(
-              replay,
-              dependencies.sessions?.agentRuns(replay.sessionId) ?? [],
-            ),
+          await deliverDebateReport(
+            port,
+            replay,
+            dependencies.sessions?.agentRuns(replay.sessionId) ?? [],
           );
           return;
         }
@@ -309,11 +319,10 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
           },
           dependencies.config.debate ?? defaults,
         );
-        await port.editReply(
-          formatDebateReport(
-            report,
-            dependencies.sessions?.agentRuns(report.sessionId) ?? [],
-          ),
+        await deliverDebateReport(
+          port,
+          report,
+          dependencies.sessions?.agentRuns(report.sessionId) ?? [],
         );
         return;
       }

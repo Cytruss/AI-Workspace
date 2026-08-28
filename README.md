@@ -14,15 +14,111 @@ This guide does not promise a free test. A provider execution can consume paid u
 
 ## What you need before setup
 
-On Windows, use Node.js 22, pnpm 11, and Git. Node 22 is the CI-tested application runtime and the preferred first-install path. Clone this repository into a working folder, open PowerShell in that folder, then install its dependencies:
+On Windows, use Node.js 22, pnpm 11, and Git. Node 22 is the CI-tested application runtime and the preferred first-install path.
 
-```powershell
-pnpm install --frozen-lockfile
-```
+### Install the required tools on Windows
 
-### Recommended Windows setup: run `pnpm onboarding`
+Do this once before cloning the repository. If you already need another Node.js version for other projects, use [Keep an existing Node.js version](#keep-an-existing-nodejs-version) instead of replacing it.
 
-**New to AI Workspace on Windows? Start with the local onboarding walkthrough.** From the repository folder, run:
+1. Install **Node.js 22**. In PowerShell, run:
+
+   ```powershell
+   winget install --id OpenJS.NodeJS.22 -e
+   ```
+
+   If `winget` is unavailable, download the `node-v22.*-x64.msi` installer for most Windows PCs from the official [Node.js 22 download page](https://nodejs.org/download/release/latest-v22.x/), run it, and keep the default options.
+
+2. Install **Git**. In PowerShell, run:
+
+   ```powershell
+   winget install --id Git.Git -e --source winget
+   ```
+
+   If `winget` is unavailable, use the official [Git for Windows installer](https://git-scm.com/download/win) and keep the default options.
+
+3. Close every PowerShell window. Open a new PowerShell window **as Administrator**: open Start, search for `PowerShell`, right-click it, choose **Run as administrator**, and accept the Windows prompt. Run:
+
+   ```powershell
+   corepack enable
+   pnpm --version
+   ```
+
+   Node.js 22 includes Corepack. `corepack enable` makes the `pnpm` command available; it normally has no output, but it must be run as Administrator once because it creates the pnpm launcher in `C:\Program Files\nodejs`. The first `pnpm --version` downloads the project's required pnpm 11 version. When it asks `Do you want to continue? [Y/n]`, type `Y` and press Enter. This is expected and happens only once.
+
+4. Close the Administrator window. Open normal PowerShell and verify the tools:
+
+   ```powershell
+   node --version
+   git --version
+   pnpm --version
+   ```
+
+   Continue only after all three commands print a version number.
+
+### Keep an existing Node.js version
+
+If `node --version` shows a version other than 22 (for example, Node.js 24) and you use it for other projects, **do not uninstall or replace it**. Install Node.js 22 alongside it for AI Workspace only:
+
+1. Install the Fast Node Manager (`fnm`):
+
+   ```powershell
+   winget install --id Schniz.fnm -e
+   ```
+
+2. Close PowerShell, then open a new **normal** PowerShell window. Run these commands once to install Node.js 22 and select it only in this window:
+
+   ```powershell
+   fnm env --shell powershell | Out-String | Invoke-Expression
+   fnm install 22
+   fnm use 22
+   node --version
+   function pnpm { fnm exec --using=22 -- corepack.cmd pnpm @args }
+   pnpm --version
+   ```
+
+   `node --version` must print `v22...`, and `pnpm --version` must print a pnpm version. The `pnpm` function applies only in this PowerShell window. It makes every later `pnpm ...` command in this guide use Node.js 22. Your other PowerShell windows and projects continue to use their existing Node.js version.
+
+3. In the AI Workspace folder, use the normal command from this guide:
+
+   ```powershell
+   pnpm install --frozen-lockfile
+   ```
+
+   The wrapper makes both pnpm and its package-install scripts use Node.js 22. On the first run, Corepack may ask to download pnpm; type `Y` and press Enter. If an earlier install failed while using another Node.js version, repeat the command with `--force` at the end.
+
+### Windows database dependency note
+
+AI Workspace pins `better-sqlite3` 12.10.0 for Windows-friendly installation. Its Windows x64 database component is included for use with Node.js 22, so normal setup needs only Node.js 22, pnpm, and Git from the list above.
+
+If installation still mentions `better-sqlite3`, `node-gyp`, or `gyp ERR! find VS`:
+
+1. Confirm that you are on Node.js 22, then run `pnpm why better-sqlite3`. The expected installed version is `12.10.0`.
+2. If it reports an older version such as `13.0.3`, update your repository checkout to the current version, then run `pnpm install --frozen-lockfile --force`.
+3. Do not install additional software or edit package versions yourself. If the current version still fails, save the error output and report it.
+
+### First-time sequence
+
+1. **Prepare this folder:** follow [Install the required tools on Windows](#install-the-required-tools-on-windows), clone the repository, and run `pnpm install --frozen-lockfile`. This installs the application; it does **not** configure the bot yet.
+2. **Create Discord first:** create the private Discord application and bot, create/select the one private server, and install the bot there. It is normal for it to show **Offline** at this stage.
+3. **Copy the Discord IDs:** turn on Discord Developer Mode and copy the **Application ID**, **Server ID** (guild ID), and your **User ID**. AI Workspace does not ask for a separate bot-user ID.
+4. **Configure AI Workspace:** now complete the configuration part of `pnpm onboarding` (recommended) or run `pnpm setup` directly. Enter those IDs, register at least one local project, and paste the bot token only into the hidden prompt.
+5. **Start the bot:** run `pnpm run doctor`, then `pnpm start` and keep that terminal open. The bot is online only while this local process runs.
+6. **Use Discord:** in the private channel, run `/projects`, then `/switch`, then your first read-only `/ask` or `/debate` request.
+
+### Before onboarding: clone the repository, then create your Discord bot
+
+Do these steps in order:
+
+1. Follow [Install the required tools on Windows](#install-the-required-tools-on-windows). Then clone and prepare the repository:
+
+   ```powershell
+   git clone https://github.com/Cytruss/AI-Workspace.git
+   cd AI-Workspace
+   pnpm install --frozen-lockfile
+   ```
+
+2. Create the private Discord application, bot, and server, then copy the Application ID, Server/Guild ID, and your User ID.
+3. Only then, from the cloned `AI-Workspace` folder, start the local onboarding walkthrough:
 
 ```powershell
 pnpm onboarding
@@ -60,7 +156,7 @@ Use the official [Discord Developer Portal](https://discord.com/developers/appli
 3. Open the application's **Bot** page. Create or confirm the bot user, then ensure **Public Bot** is disabled. A non-public bot can be added only by its owner. Do not enable privileged gateway intents: this application uses only the standard guild intent.
 4. Still on **Bot**, use the portal control for the bot token only when you are ready to run local setup. Treat the token like a password. Do not put a value in source control, a command line, a screenshot, or a support request.
 5. Open **Installation**. Because this is a private bot, set **Install Link** (sometimes labelled **Default Authorization Link**) to **None**, then save. Discord rejects a private app with a default authorization link; **None** is the intended private-app setting. It also hides **Default Install Settings**, so do not switch the app to public just to expose those controls. See Discord's [install-link reference](https://docs.discord.com/developers/resources/application#install-links) for the distinction between a default link and a manually created OAuth2 invitation.
-6. Create a **guild-only** invitation instead. If your portal still offers **OAuth2** > **URL Generator**, select exactly `bot` and `applications.commands`. Otherwise, replace the two placeholders in this private, single-guild URL and open it yourself:
+6. Create a **guild-only** invitation instead. If your portal still offers **OAuth2** > **URL Generator**, select exactly `bot` and `applications.commands`, then copy the generated URL. Otherwise, replace the two placeholders in this private, single-guild URL:
 
    ```text
    https://discord.com/oauth2/authorize?client_id=<DISCORD_APPLICATION_ID>&scope=bot%20applications.commands&permissions=35840&integration_type=0&guild_id=<GUILD_ID>&disable_guild_select=true
@@ -68,8 +164,17 @@ Use the official [Discord Developer Portal](https://discord.com/developers/appli
 
    `permissions=35840` requests only **View Channel**, **Send Messages**, and **Attach Files**. `integration_type=0` is Guild Install; `guild_id` plus `disable_guild_select=true` keeps the dialog pointed at that one private server. A non-public bot can be added only by its owner, who must also have permission to add apps to the selected server.
 
-7. After the bot is present in the server, restrict it to the intended channel with that channel's permission overrides. Give the authorized human operator role or user—not the bot—**Use Application Commands** (sometimes labelled **Use Slash Commands**). AI Workspace does not subscribe to general message-content events; it receives its slash-command interactions. It does not need administrator, member, role-management, voice, or privileged-intent permissions.
-8. Complete the invite only for the private server you control. Do not publish the manual URL or install the bot into a shared or public guild.
+7. **Install the bot into your private server:** open the copied URL while signed in to Discord as the bot owner. In Discord's invite dialog, select **Add to Server**, choose the one private server you control, then select **Continue** and **Authorize** (complete any CAPTCHA). Return to Discord and confirm that the bot appears in that server's member list. It can display **Offline** at this point: it becomes online only after you finish local setup and run `pnpm start` in step 5, keeping that terminal open. If the server is not offered in the dialog, sign in as the bot owner with permission to add apps to that server; do not enable **Public Bot** to work around the problem.
+8. **Configure the one private channel where you will use the bot:**
+
+   1. In Discord, right-click the intended text channel and choose **Edit Channel** (often **Edytuj kanał**), then open **Permissions** (**Uprawnienia**).
+   2. Choose **Add members or roles** and select the bot. Allow only **View Channel**, **Send Messages**, and **Attach Files**. Do not grant it **Administrator**, member/role management, voice permissions, or privileged intents.
+   3. Choose **Add members or roles** again and select your authorized human user or operator role. Allow **View Channel** and **Use Application Commands** (sometimes labelled **Use Slash Commands**).
+   4. Select **Save Changes**, return to the channel, and run `/projects`. A response confirms that the bot can see and send messages in this channel.
+
+   The **Use Application Commands** permission belongs to the human operator, not the bot. AI Workspace does not subscribe to general message-content events; it receives slash-command interactions only.
+
+9. Do not publish the manual URL or install the bot into a shared or public guild.
 
 ### Collect the three identifiers without publishing them
 
@@ -125,6 +230,66 @@ Use placeholders in notes and screenshots. Never replace the placeholders below 
 | `Discord token:`                                                 | Paste the private bot token only into this hidden prompt               | It is written only to the ignored `.env` file as `AI_WORKSPACE_DISCORD_TOKEN`. Do not type it as a command argument.                                                       |
 | `Create local configuration and .env now? (yes/no):`             | `yes` only after reviewing every answer                                | Writes local configuration and creates `.env`; if `.env` already exists, resolve that deliberately instead of overwriting it.                                              |
 
+For example, if you cloned this repository into `C:\Users\<YOUR_WINDOWS_USER>\ai-test\AI-Workspace`, enter this at the project prompt:
+
+```text
+ai-workspace|AI Workspace|C:\Users\<YOUR_WINDOWS_USER>\ai-test\AI-Workspace
+```
+
+Then submit one blank project prompt to finish the list. Use your own Windows username and the actual folder where you cloned the repository.
+
+### What guided onboarding looks like
+
+If you use `fnm` to keep Node.js 22 alongside another Node.js version, start the walkthrough with this command from the cloned repository folder:
+
+```powershell
+fnm exec --using=22 -- corepack.cmd pnpm onboarding
+```
+
+The exact diagnostic versions and executable paths will differ. This redacted outline shows the normal order and the answers that are deliberately blank. Never paste real IDs or a bot token into a document, screenshot, or chat.
+
+```text
+Choose onboarding mode (guided/semi-automatic/cancel): guided
+Open the official Codex documentation? Sign-in happens in the Codex CLI, not on this page. (yes/no/cancel): no
+Continue after completing the reported manual prerequisite steps? (yes/no/cancel): yes
+Open the official Discord Developer Portal page? (yes/no/cancel): no
+Have you completed the Discord manual tasks? (yes/no/cancel): yes
+Discord application ID: <YOUR_APPLICATION_ID>
+Discord guild IDs (comma-separated): <YOUR_SERVER_ID>
+Authorized user IDs (comma-separated): <YOUR_DISCORD_USER_ID>
+Project id|name|absolute-root (blank to finish): ai-workspace|AI Workspace|C:\\Users\\<YOUR_WINDOWS_USER>\\ai-test\\AI-Workspace
+Project id|name|absolute-root (blank to finish):
+codex native executable path (optional): <FULL_PATH_TO_CODEX.EXE>
+Save this portable native executable path for codex? (yes/no): yes
+codex model class|CLI ID|effort?|exact observed IDs|prefixes (blank to finish):
+codex default model class (blank for provider default):
+claude native executable path (optional): <FULL_PATH_TO_CLAUDE.EXE>
+Save this portable native executable path for claude? (yes/no): yes
+claude model class|CLI ID|effort?|exact observed IDs|prefixes (blank to finish):
+claude default model class (blank for provider default):
+Discord token: <PASTE_THE_PRIVATE_BOT_TOKEN_HERE>
+Create local configuration and .env now? (yes/no): yes
+```
+
+The blank second project prompt finishes the project list. Leave both Codex model prompts blank. Claude model prompts are also optional: leave them blank unless you have already configured and verified a Claude model policy. The token prompt is hidden; paste the **Bot Token** from the Discord Developer Portal's **Bot** page, not the application ID, server ID, user ID, client secret, or the bot invite URL.
+
+After configuration, onboarding runs Doctor. A normal healthy result includes `Database: writable`, `Project ai-workspace: valid`, and `codex: available`. Claude should show `claude: available` when its supported native executable is configured. Codex provider-default model reporting remains unverified by design; do not add Codex model classes to make that line disappear.
+
+If Doctor instead reports that `better_sqlite3.node` was compiled for a different Node.js version, rebuild it under Node.js 22, then rerun Doctor:
+
+```powershell
+fnm exec --using=22 -- corepack.cmd pnpm rebuild better-sqlite3
+fnm exec --using=22 -- corepack.cmd pnpm run doctor
+```
+
+If onboarding says that Codex is missing even though the Codex desktop app is installed, open a normal PowerShell window and run:
+
+```powershell
+Get-Command codex -All | Select-Object -ExpandProperty Source
+```
+
+Copy the path ending in `codex.exe`, run `& "<COPIED_CODEX_EXE_PATH>" login` to complete the manual sign-in, then paste that same `.exe` path into the onboarding prompt. Do not paste a `.cmd` or `.bat` path.
+
 Model classes such as `sol`, `terra`, `luna`, `opus`, `fable`, `sonnet`, and `haiku` are optional local names, not claims that your account can use those models. For Codex, leave every model entry and its default blank: its current probe has no observed-model reporting, so any non-empty configured selection intentionally fails doctor. For Claude, an exact observed-model ID or literal prefix is required for a configured class. Provider-default execution is unverified.
 
 ## 4. Check the local machine with `pnpm run doctor`
@@ -149,6 +314,8 @@ Doctor reports Node, then checks Git, the local database, each registered projec
 Doctor's shareable output redacts home-relative executable details, but still review it before sharing. It warns when managed provider settings may override inline controls and when a fallback might incur cost before a model-class mismatch is rejected.
 
 ## 5. First private session
+
+`/projects` does **not** depend on running `pnpm onboarding` specifically. Before starting the bot, complete one configuration path: finish the configuration portion of `pnpm onboarding` **or** run `pnpm setup` directly. Both paths create the same local configuration, including at least one registered project. If no project was registered, `/projects` replies `No projects are registered.`
 
 Only after you deliberately accept the provider-cost boundary, start the bot from the AI Workspace working folder. An opt-in provider request below—not doctor—is the first check of provider authentication, entitlement, and real-request readiness:
 
@@ -304,16 +471,16 @@ After the first request, inspect the selected project yourself with `git status 
 
 ## Troubleshooting
 
-| Symptom                                                                                  | Likely cause                                                                                                                                | Safe next step                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Setup rejects a command ending in `.cmd` or `.bat`                                       | The application intentionally refuses Windows shims.                                                                                        | Locate or install the provider's native `.exe`; do not rename or wrap the shim.                                                                                                                                                                                                                                                                                                                                                                                          |
-| Setup cannot find a provider executable                                                  | The CLI is not installed or no native executable is available.                                                                              | Complete the provider's official installation, verify `--version`, then enter the native path in setup. Sign-in is verified only by an opt-in provider request.                                                                                                                                                                                                                                                                                                          |
-| The bot is online but commands do not appear                                             | The bot may not be installed into the selected guild, its application ID/guild allowlist may be wrong, or channel permissions may block it. | Check the Developer Portal **Installation** settings and private-guild install. In the intended channel, grant the bot View Channel, Send Messages, and Attach Files; grant the authorized human operator Use Application Commands.                                                                                                                                                                                                                                      |
-| A command says the server or user is not authorized                                      | The guild ID or user ID was not included at setup.                                                                                          | Recopy the ID with Developer Mode and rerun setup; do not send the ID in public support channels.                                                                                                                                                                                                                                                                                                                                                                        |
-| `/ask` says no active project is selected                                                | `/switch` has not been run for this guild/channel/user.                                                                                     | Run `/projects`, then `/switch project:<YOUR_PROJECT_ID>`.                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Doctor says a model or effort contract is unavailable                                    | A configured selection does not match provider capabilities or observed-model policy.                                                       | For Codex, leave every model selection and its default blank. For Claude, use an allowed configured class or leave its selections blank for the provider default; do not weaken persisted evidence.                                                                                                                                                                                                                                                                      |
-| A provider result is partial, failed, or cancelled                                       | A provider, authentication, network, timeout, safety contract, or cancellation interrupted work.                                            | Use `/status` for the persisted record, fix the reported local condition, then issue a new read-only request.                                                                                                                                                                                                                                                                                                                                                            |
-| Installation or a quality command cannot build the native database dependency on Windows | A later Node major may require a native source build.                                                                                       | Use Node.js 22 first: it is the CI-tested application runtime and preferred first-install path. If a source build is still required, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the [Desktop development with C++](https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools?view=vs-2022) workload. Do not change package or CI configuration merely to bypass the failure. |
+| Symptom                                                                              | Likely cause                                                                                                                                | Safe next step                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setup rejects a command ending in `.cmd` or `.bat`                                   | The application intentionally refuses Windows shims.                                                                                        | Locate or install the provider's native `.exe`; do not rename or wrap the shim.                                                                                                                                                                                             |
+| Setup cannot find a provider executable                                              | The CLI is not installed or no native executable is available.                                                                              | Complete the provider's official installation, verify `--version`, then enter the native path in setup. Sign-in is verified only by an opt-in provider request.                                                                                                             |
+| The bot is online but commands do not appear                                         | The bot may not be installed into the selected guild, its application ID/guild allowlist may be wrong, or channel permissions may block it. | Check the Developer Portal **Installation** settings and private-guild install. In the intended channel, grant the bot View Channel, Send Messages, and Attach Files; grant the authorized human operator Use Application Commands.                                         |
+| A command says the server or user is not authorized                                  | The guild ID or user ID was not included at setup.                                                                                          | Recopy the ID with Developer Mode and rerun setup; do not send the ID in public support channels.                                                                                                                                                                           |
+| `/ask` says no active project is selected                                            | `/switch` has not been run for this guild/channel/user.                                                                                     | Run `/projects`, then `/switch project:<YOUR_PROJECT_ID>`.                                                                                                                                                                                                                  |
+| Doctor says a model or effort contract is unavailable                                | A configured selection does not match provider capabilities or observed-model policy.                                                       | For Codex, leave every model selection and its default blank. For Claude, use an allowed configured class or leave its selections blank for the provider default; do not weaken persisted evidence.                                                                         |
+| A provider result is partial, failed, or cancelled                                   | A provider, authentication, network, timeout, safety contract, or cancellation interrupted work.                                            | Use `/status` for the persisted record, fix the reported local condition, then issue a new read-only request.                                                                                                                                                               |
+| Installation mentions `better-sqlite3`, `node-gyp`, or `gyp ERR! find VS` on Windows | The checkout may predate the Windows prebuilt dependency fix, or a previous installation may be partial.                                    | Confirm Node.js 22, run `pnpm why better-sqlite3` (expected: `12.10.0`), update an older checkout, then run `pnpm install --frozen-lockfile --force`. Do not install extra software or edit package versions yourself; report the error if the current version still fails. |
 
 ## macOS and Linux notes
 

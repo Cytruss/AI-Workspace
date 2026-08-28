@@ -21,11 +21,11 @@ describe("buildSafeEnvironment", () => {
   });
 
   test.runIf(process.platform === "win32")(
-    "matches allowlisted names case-insensitively on Windows",
+    "normalizes allowlisted variable names on Windows",
     () => {
       expect(
         buildSafeEnvironment({ Path: "value", appdata: "config" }, []),
-      ).toEqual({ Path: "value", appdata: "config" });
+      ).toEqual({ PATH: "value", APPDATA: "config" });
     },
   );
 });

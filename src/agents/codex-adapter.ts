@@ -24,6 +24,66 @@ import {
 
 export const MAX_RESPONSE_SCHEMA_BYTES = 32_768;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isImpossibleSchema(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    isRecord(value["not"]) &&
+    Object.keys(value["not"]).length === 0
+  );
+}
+
+function strictCodexOutputSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(strictCodexOutputSchema);
+  if (!isRecord(value)) return value;
+  const schema: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    schema[key] =
+      key === "additionalProperties" &&
+      isRecord(entry) &&
+      Object.keys(entry).length === 0
+        ? false
+        : strictCodexOutputSchema(entry);
+  }
+  const rawProperties = schema["properties"];
+  if (isRecord(rawProperties)) {
+    const properties = Object.fromEntries(
+      Object.entries(rawProperties).filter(
+        ([, property]) => !isImpossibleSchema(property),
+      ),
+    );
+    schema["properties"] = properties;
+    const propertyNames = Object.keys(properties);
+    const required = Array.isArray(schema["required"])
+      ? schema["required"].filter(
+          (name): name is string => typeof name === "string",
+        )
+      : [];
+    for (const name of propertyNames) {
+      if (required.includes(name)) continue;
+      properties[name] = {
+        anyOf: [properties[name], { type: "null" }],
+      };
+    }
+    schema["required"] = propertyNames;
+  }
+  return schema;
+}
+
+function stripNullObjectProperties(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNullObjectProperties);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entry]) => entry !== null)
+      .map(([key, entry]) => [key, stripNullObjectProperties(entry)]),
+  );
+}
+
 export interface CodexArgumentOptions {
   projectRoot: string;
   schemaPath: string;
@@ -39,6 +99,10 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
     "--json",
     "--sandbox",
     "read-only",
+    "--config",
+    'windows.sandbox="elevated"',
+    "--config",
+    'approval_policy="never"',
     "-C",
     options.projectRoot,
     "--output-schema",
@@ -100,7 +164,6 @@ const CODEX_FLAGS = [
   "--ignore-rules",
   "--json",
   "--output-schema",
-  "--sandbox",
   "--model",
   "--config",
 ] as const;
@@ -218,7 +281,9 @@ export class CodexAdapter implements AgentAdapter {
       return this.failed(request, 0, [
         "OBSERVE mode with a response schema is required",
       ]);
-    const schema = JSON.stringify(z.toJSONSchema(request.responseSchema));
+    const schema = JSON.stringify(
+      strictCodexOutputSchema(z.toJSONSchema(request.responseSchema)),
+    );
     if (Buffer.byteLength(schema, "utf8") > MAX_RESPONSE_SCHEMA_BYTES)
       return this.failed(request, 0, ["Response schema exceeds 32768 bytes"]);
     const before = await this.integrity(request.projectRoot);
@@ -274,7 +339,7 @@ export class CodexAdapter implements AgentAdapter {
           processResult,
         );
       const structured = request.responseSchema.parse(
-        parseCodexJsonl(processResult.stdout),
+        stripNullObjectProperties(parseCodexJsonl(processResult.stdout)),
       );
       return {
         agentId: this.id,

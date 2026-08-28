@@ -101,6 +101,39 @@ export function formatModels(models: ProviderModels): DiscordPayload {
   );
 }
 
+function formatReadOnlyListing(content: string): string {
+  return content.replace(
+    /```text\r?\n([\s\S]*?)\r?\n```/g,
+    (block: string, body: string): string => {
+      const entries = body
+        .split(/\r?\n/)
+        .filter((entry: string) => entry !== "");
+      return entries.length > 0 &&
+        entries.every((entry: string) => !/\s/.test(entry))
+        ? entries.map((entry: string) => `- ${entry}`).join("\n")
+        : block;
+    },
+  );
+}
+
+function unwrapAskContent(response: string): string {
+  try {
+    const parsed: unknown = JSON.parse(response);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "phase" in parsed &&
+      "content" in parsed &&
+      parsed.phase === "ask" &&
+      typeof parsed.content === "string"
+    )
+      return parsed.content;
+  } catch {
+    // Ordinary plain-text agent replies are not JSON.
+  }
+  return response;
+}
+
 export function formatAskReport(report: AskReport): DiscordPayload {
   const lines = [
     `Project: ${report.project.id}`,
@@ -121,7 +154,7 @@ export function formatAskReport(report: AskReport): DiscordPayload {
     const diagnostic = safeFailure(result);
     if (diagnostic !== undefined) lines.push(diagnostic);
     if (result.response !== undefined && safeFailure(result) === undefined)
-      lines.push("", result.response);
+      lines.push("", formatReadOnlyListing(unwrapAskContent(result.response)));
   }
   return payload(lines.join("\n"), `ask-${report.sessionId}.txt`);
 }
@@ -222,10 +255,137 @@ function verdictLines(
   return lines;
 }
 
-export function formatDebateReport(
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatDebateAnalysisContent(content: string | undefined): string {
+  if (content === undefined) return "No content";
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (!isRecord(parsed)) return content;
+    const phase = parsed["phase"];
+    const initialClaims = parsed["claims"];
+    if (phase === "initial" && Array.isArray(initialClaims)) {
+      const claims = initialClaims.flatMap((claim): string[] => {
+        if (!isRecord(claim)) return [];
+        const text = claim["text"];
+        if (typeof text !== "string") return [];
+        const material = claim["material"] === true;
+        const localEvidenceIds = claim["evidenceLocalIds"];
+        const evidence = Array.isArray(localEvidenceIds)
+          ? localEvidenceIds.filter(
+              (id): id is string => typeof id === "string",
+            )
+          : [];
+        return [
+          `- [${material ? "material" : "context"}] ${text} (evidence: ${
+            evidence.join(", ") || "none"
+          })`,
+        ];
+      });
+      const evidence = parsed["evidence"];
+      const evidenceCount = Array.isArray(evidence) ? evidence.length : 0;
+      return [
+        "Initial analysis:",
+        ...(claims.length === 0 ? ["- No claims supplied."] : claims),
+        `Evidence cited: ${String(evidenceCount)}`,
+      ].join("\n");
+    }
+  } catch {
+    // Ordinary provider display content is not JSON.
+  }
+  return content;
+}
+
+function claimText(
+  verdict: DebateReport["verdicts"][number],
+  board: DebateReport["board"],
+): string {
+  return (
+    board?.claims.find((claim) => claim.id === verdict.claimId)?.text ??
+    "Claim text unavailable"
+  );
+}
+
+function summaryClaims(
+  verdicts: DebateReport["verdicts"],
+  board: DebateReport["board"],
+  empty: string,
+): string[] {
+  return verdicts.length === 0
+    ? [empty]
+    : verdicts.map((verdict) => `- ${claimText(verdict, board)}`);
+}
+
+function debateSummary(report: DebateReport): string {
+  const counts = {
+    agreed: report.consensus.length,
+    disputed: report.disagreements.length,
+    uncertain: report.unresolved.length,
+    rejected: report.rejected.length,
+  };
+  return [
+    "## What happened",
+    `The agents reviewed ${String(report.verdicts.length)} claim${
+      report.verdicts.length === 1 ? "" : "s"
+    }. They reached the same conclusion on ${String(counts.agreed)} and both rejected ${String(counts.rejected)}.`,
+    "",
+    "### What both agents agree on",
+    ...summaryClaims(
+      report.consensus,
+      report.board,
+      "- No shared conclusions.",
+    ),
+    "",
+    "### Where they see it differently",
+    ...summaryClaims(
+      report.disagreements,
+      report.board,
+      "- No material disagreements.",
+    ),
+    "",
+    "### What remains uncertain",
+    ...summaryClaims(
+      report.unresolved,
+      report.board,
+      "- No unresolved claims.",
+    ),
+    "",
+    `Result: Agreed: ${String(counts.agreed)}; Different interpretations: ${String(counts.disputed)}; Uncertain: ${String(counts.uncertain)}; Rejected: ${String(counts.rejected)}.`,
+    "Detailed evidence and reasoning are attached.",
+  ].join("\n");
+}
+
+function splitDiscordText(content: string): readonly string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (const line of content.split("\n")) {
+    let remaining = line;
+    do {
+      const separator = current.length === 0 ? "" : "\n";
+      const space = LIMIT - current.length - separator.length;
+      if (remaining.length <= space) {
+        current += `${separator}${remaining}`;
+        remaining = "";
+      } else if (current.length > 0) {
+        parts.push(current);
+        current = "";
+      } else {
+        const splitAt = Math.max(1, remaining.lastIndexOf(" ", LIMIT));
+        parts.push(remaining.slice(0, splitAt));
+        remaining = remaining.slice(splitAt).trimStart();
+      }
+    } while (remaining.length > 0);
+  }
+  if (current.length > 0) parts.push(current);
+  return parts;
+}
+
+export function formatDebateReportParts(
   report: DebateReport,
   runs: readonly AgentRunRecord[] = [],
-): DiscordPayload {
+): readonly DiscordPayload[] {
   const frozen = (["codex", "claude"] as const).map((agentId) => {
     const execution = runs.find(
       (run) => run.agentId === agentId,
@@ -259,7 +419,7 @@ export function formatDebateReport(
           (execution !== undefined && execution.requestedClass === undefined));
       return `${agentName(analysis.agentId)} (${analysis.status}): ${
         display
-          ? (analysis.content ?? "No content")
+          ? formatDebateAnalysisContent(analysis.content)
           : "Content withheld because model verification is unverified"
       }${
         display && execution.verification === "unverified"
@@ -303,5 +463,24 @@ export function formatDebateReport(
         ];
       }),
   ];
-  return payload(lines.join("\n"), `debate-${report.sessionId}.txt`);
+  return splitDiscordText(debateSummary(report)).map((content, index) =>
+    index === 0
+      ? {
+          content,
+          files: [
+            {
+              attachment: Buffer.from(lines.join("\n"), "utf8"),
+              name: `debate-${report.sessionId}.txt`,
+            },
+          ],
+        }
+      : { content },
+  );
+}
+
+export function formatDebateReport(
+  report: DebateReport,
+  runs: readonly AgentRunRecord[] = [],
+): DiscordPayload {
+  return formatDebateReportParts(report, runs)[0] as DiscordPayload;
 }

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -81,8 +82,23 @@ function request(
 describe("hardened adapter lifecycle with fake Node providers", () => {
   test("Codex uses a real bounded process with private schema transport and inert stdin", async () => {
     const calls: ProcessRequest[] = [];
+    let transportedSchema: unknown;
     const adapter = new CodexAdapter(config, {
-      runProcess: fixtureRunner(codexCli, calls),
+      runProcess: async (processRequest) => {
+        calls.push(processRequest);
+        const schemaFlag = processRequest.args.indexOf("--output-schema");
+        if (schemaFlag >= 0) {
+          const schemaPath = processRequest.args[schemaFlag + 1];
+          if (schemaPath === undefined)
+            throw new Error("Codex invocation did not include a schema path");
+          transportedSchema = JSON.parse(readFileSync(schemaPath, "utf8"));
+        }
+        return runProcess({
+          ...processRequest,
+          command: process.execPath,
+          args: [codexCli, ...processRequest.args],
+        });
+      },
       captureGitIntegrity: () => Promise.resolve(snapshot),
     });
     const result = await adapter.run(
@@ -96,6 +112,29 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
       structured: { phase: "initial" },
     });
     expect(invoke?.stdin).toBe("inert $(value)");
+    expect(transportedSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+    });
+    const schema = transportedSchema as {
+      properties?: {
+        evidence?: {
+          items?: {
+            required?: unknown;
+            properties?: { lineStart?: unknown; lineEnd?: unknown };
+          };
+        };
+      };
+    };
+    const evidenceItems = schema.properties?.evidence?.items;
+    expect(evidenceItems?.required).toEqual(
+      expect.arrayContaining(["lineStart", "lineEnd"]),
+    );
+    expect(JSON.stringify(evidenceItems?.properties?.lineStart)).toContain(
+      '"type":"null"',
+    );
+    expect(schema.properties).not.toHaveProperty("stances");
+    expect(schema.properties).not.toHaveProperty("newEvidence");
     expect(invoke?.args).toEqual(
       expect.arrayContaining([
         "exec",
@@ -105,6 +144,10 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
         "--json",
         "--sandbox",
         "read-only",
+        "--config",
+        'windows.sandbox="elevated"',
+        "--config",
+        'approval_policy="never"',
         "-C",
         process.cwd(),
         "--output-schema",
@@ -133,7 +176,7 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
     expect(invoke?.args[settings + 1]).toBe(CLAUDE_SETTINGS);
     expect(invoke?.args).toEqual(
       expect.arrayContaining([
-        "--bare",
+        "--safe-mode",
         "--tools",
         "Read,Glob,Grep",
         "--disallowedTools",
@@ -147,9 +190,32 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
       ]),
     );
     expect(invoke?.args[schema + 1]).toContain('"phase"');
+    expect(JSON.parse(invoke?.args[schema + 1] ?? "{}")).toMatchObject({
+      $schema: "http://json-schema.org/draft-07/schema#",
+    });
     expect(invoke?.args).not.toEqual(
       expect.arrayContaining(["Bash", "Edit", "Write", "Notebook"]),
     );
+  });
+
+  test("Codex accepts API-required null placeholders for optional response fields", async () => {
+    const adapter = new CodexAdapter(config, {
+      runProcess: fixtureRunner(codexCli, []),
+      captureGitIntegrity: () => Promise.resolve(snapshot),
+    });
+    await expect(
+      adapter.run(request("NULL_OPTIONALS"), new AbortController().signal),
+    ).resolves.toMatchObject({
+      status: "completed",
+      structured: {
+        evidence: [
+          {
+            localId: "codex-evidence",
+            trackedPath: "src/example.ts",
+          },
+        ],
+      },
+    });
   });
 
   test.each([

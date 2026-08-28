@@ -36,7 +36,7 @@ export function buildSafeEnvironment(
       normalizedName !== forbidden &&
       allowed.has(normalizedName)
     ) {
-      result[name] = value;
+      result[process.platform === "win32" ? normalizedName : name] = value;
     }
   }
   return result;

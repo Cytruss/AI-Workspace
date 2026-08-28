@@ -15,7 +15,7 @@ const fixture = fileURLToPath(
 describe("Claude adapter arguments and JSON parser", () => {
   const schema = '{"type":"object","properties":{"phase":{"const":"initial"}}}';
   const safety = [
-    "--bare",
+    "--safe-mode",
     "--settings",
     CLAUDE_SETTINGS,
     "--tools",
@@ -94,7 +94,7 @@ describe("Claude adapter arguments and JSON parser", () => {
   test("rejects a patch-only version below the compatibility floor", async () => {
     const outputs = [
       "2.0.999",
-      "--bare --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage",
+      "--safe-mode --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort modelUsage",
     ];
     const adapter = new ClaudeAdapter(
       {
@@ -116,6 +116,50 @@ describe("Claude adapter arguments and JSON parser", () => {
       },
     );
     await expect(adapter.probe()).resolves.toMatchObject({ available: false });
+  });
+
+  test("accepts help that documents flags but not the modelUsage response field", async () => {
+    const outputs = [
+      "2.1.233 (Claude Code)",
+      [
+        "Usage: claude [options] [command] [prompt]",
+        "  --safe-mode",
+        "  --settings <json>",
+        "  --tools <tools>",
+        "  --disallowedTools <tools>",
+        "  --permission-mode <mode>",
+        "  --no-session-persistence",
+        "  -p, --print",
+        "  --output-format <format>",
+        "  --json-schema <schema>",
+        "  --model <model>",
+        "  --effort <effort>",
+      ].join("\n"),
+    ];
+    const adapter = new ClaudeAdapter(
+      {
+        command: "claude",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: () =>
+          Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout: outputs.shift() ?? "",
+            stderr: "",
+            durationMs: 1,
+            termination: "exit",
+          }),
+      },
+    );
+
+    await expect(adapter.probe()).resolves.toMatchObject({
+      available: true,
+      observedModelReporting: { supported: true, source: "modelUsage" },
+    });
   });
 
   test("rejects an unconfigured structural selection before probing", async () => {

@@ -35,6 +35,9 @@ function port(interaction: ChatInputCommandInteraction): InteractionPort {
     editReply: async (content) => {
       await interaction.editReply(content);
     },
+    followUp: async (content) => {
+      await interaction.followUp(content);
+    },
   };
 }
 

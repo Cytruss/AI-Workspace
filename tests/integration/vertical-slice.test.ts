@@ -82,6 +82,7 @@ function interaction(name: string, values: Record<string, string> = {}) {
       Promise.resolve().then(() => void port.replies.push(value)),
     editReply: (value) =>
       Promise.resolve().then(() => void port.edits.push(value)),
+    followUp: () => Promise.resolve(),
   };
   return port;
 }
@@ -445,10 +446,21 @@ describe("dual-agent vertical slice", () => {
       }
       for (const call of inferenceCalls(harness.codexCalls)) {
         expect(call.args).toEqual(
-          expect.arrayContaining(["--sandbox", "read-only"]),
+          expect.arrayContaining([
+            "--sandbox",
+            "read-only",
+            "--config",
+            'windows.sandbox="elevated"',
+            "--config",
+            'approval_policy="never"',
+          ]),
         );
         expect(call.args).not.toContain("--model");
-        expect(call.args).not.toContain("--config");
+        expect(
+          call.args.some((argument) =>
+            argument.startsWith("model_reasoning_effort="),
+          ),
+        ).toBe(false);
         expect(call.command).not.toBe("cmd.exe");
       }
       for (const call of inferenceCalls(harness.claudeCalls)) {
@@ -456,7 +468,7 @@ describe("dual-agent vertical slice", () => {
         expect(call.args[settingsIndex + 1]).toBe(CLAUDE_SETTINGS);
         expect(call.args).toEqual(
           expect.arrayContaining([
-            "--bare",
+            "--safe-mode",
             "--tools",
             "Read,Glob,Grep",
             "--disallowedTools",
@@ -623,7 +635,7 @@ describe("dual-agent vertical slice", () => {
       expect(invocation?.args).not.toContain("--effort");
       const settings = invocation?.args.indexOf("--settings") ?? -1;
       expect(invocation?.args[settings + 1]).toBe(CLAUDE_SETTINGS);
-      expect(invocation?.args).toContain("--bare");
+      expect(invocation?.args).toContain("--safe-mode");
     } finally {
       await harness.cleanup();
     }
@@ -693,7 +705,7 @@ describe("dual-agent vertical slice", () => {
       for (const call of inferenceCalls(harness.claudeCalls)) {
         const settings = call.args.indexOf("--settings");
         expect(call.args[settings + 1]).toBe(CLAUDE_SETTINGS);
-        expect(call.args).toContain("--bare");
+        expect(call.args).toContain("--safe-mode");
         expect(call.env.CLAUDE_CONFIG_DIR).toBeUndefined();
       }
     } finally {
