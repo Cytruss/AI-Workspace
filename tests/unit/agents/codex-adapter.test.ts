@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import {
   CodexAdapter,
   buildCodexArguments,
+  buildCodexReviewArguments,
   parseCodexJsonl,
 } from "../../../src/agents/codex-adapter.js";
 
@@ -93,6 +94,32 @@ describe("Codex adapter arguments and JSONL parser", () => {
         modelSelection: selection,
       }),
     ).toEqual(expected);
+  });
+
+  test("builds a generated-home website review invocation", () => {
+    expect(
+      buildCodexReviewArguments({
+        workingDirectory: "C:/private/review-workspace",
+        schemaPath: "C:/private/schema.json",
+      }),
+    ).toEqual([
+      "exec",
+      "--ephemeral",
+      "--ignore-rules",
+      "--json",
+      "--sandbox",
+      "read-only",
+      "--config",
+      'windows.sandbox="elevated"',
+      "--config",
+      'approval_policy="never"',
+      "-C",
+      "C:/private/review-workspace",
+      "--skip-git-repo-check",
+      "--output-schema",
+      "C:/private/schema.json",
+      "-",
+    ]);
   });
 
   test("extracts the completed structured JSON response from JSONL", async () => {

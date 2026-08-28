@@ -121,6 +121,44 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
   return args;
 }
 
+export interface CodexReviewArgumentOptions {
+  workingDirectory: string;
+  schemaPath: string;
+  modelSelection?: ResolvedModelSelection | undefined;
+}
+
+export function buildCodexReviewArguments(
+  options: CodexReviewArgumentOptions,
+): string[] {
+  const args = [
+    "exec",
+    "--ephemeral",
+    "--ignore-rules",
+    "--json",
+    "--sandbox",
+    "read-only",
+    "--config",
+    'windows.sandbox="elevated"',
+    "--config",
+    'approval_policy="never"',
+    "-C",
+    options.workingDirectory,
+    "--skip-git-repo-check",
+    "--output-schema",
+    options.schemaPath,
+  ];
+  if (options.modelSelection !== undefined) {
+    args.push("--model", options.modelSelection.cliModelId);
+    if (options.modelSelection.requestedEffort !== undefined)
+      args.push(
+        "--config",
+        `model_reasoning_effort="${options.modelSelection.requestedEffort}"`,
+      );
+  }
+  args.push("-");
+  return args;
+}
+
 export function parseCodexJsonl(output: string): unknown {
   let response: unknown;
   let agentMessageCompleted = false;
