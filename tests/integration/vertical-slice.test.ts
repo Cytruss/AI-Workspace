@@ -446,8 +446,8 @@ describe("dual-agent vertical slice", () => {
       for (const call of inferenceCalls(harness.codexCalls)) {
         expect(call.args).toEqual(
           expect.arrayContaining([
-            "--config",
-            'permission_profile=":read-only"',
+            "--sandbox",
+            "read-only",
             "--config",
             'approval_policy="never"',
           ]),
