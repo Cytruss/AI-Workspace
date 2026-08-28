@@ -56,6 +56,42 @@ export function buildClaudeArguments(options: ClaudeArgumentOptions): string[] {
   return args;
 }
 
+export interface ClaudeReviewArgumentOptions {
+  schema: string;
+  mcpConfig: string;
+  allowedMcpTools: string;
+  modelSelection?: ResolvedModelSelection | undefined;
+}
+
+export function buildClaudeReviewArguments(
+  options: ClaudeReviewArgumentOptions,
+): string[] {
+  const args = [
+    "--bare",
+    "--strict-mcp-config",
+    "--mcp-config",
+    options.mcpConfig,
+    "--tools",
+    "",
+    "--allowedTools",
+    options.allowedMcpTools,
+    "--permission-mode",
+    "plan",
+    "--no-session-persistence",
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    options.schema,
+  ];
+  if (options.modelSelection !== undefined) {
+    args.push("--model", options.modelSelection.cliModelId);
+    if (options.modelSelection.requestedEffort !== undefined)
+      args.push("--effort", options.modelSelection.requestedEffort);
+  }
+  return args;
+}
+
 export function parseClaudeResult(output: string): string {
   const parsed: unknown = JSON.parse(output);
   if (typeof parsed !== "object" || parsed === null) {

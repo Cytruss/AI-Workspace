@@ -5,6 +5,7 @@ import {
   CLAUDE_SETTINGS,
   ClaudeAdapter,
   buildClaudeArguments,
+  buildClaudeReviewArguments,
   parseClaudeResult,
 } from "../../../src/agents/claude-adapter.js";
 
@@ -48,6 +49,33 @@ describe("Claude adapter arguments and JSON parser", () => {
     expect(buildClaudeArguments({ schema, modelSelection: selection })).toEqual(
       expected,
     );
+  });
+
+  test("builds a strict generated-MCP review invocation", () => {
+    expect(
+      buildClaudeReviewArguments({
+        schema,
+        mcpConfig: '{"mcpServers":{}}',
+        allowedMcpTools: "mcp__review_browser__list_pages",
+      }),
+    ).toEqual([
+      "--bare",
+      "--strict-mcp-config",
+      "--mcp-config",
+      '{"mcpServers":{}}',
+      "--tools",
+      "",
+      "--allowedTools",
+      "mcp__review_browser__list_pages",
+      "--permission-mode",
+      "plan",
+      "--no-session-persistence",
+      "-p",
+      "--output-format",
+      "json",
+      "--json-schema",
+      schema,
+    ]);
   });
 
   test("extracts the successful result", async () => {
