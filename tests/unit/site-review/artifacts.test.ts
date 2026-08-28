@@ -2,7 +2,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { writeReviewArtifact } from "../../../src/site-review/artifacts.js";
+import {
+  readReviewArtifact,
+  writeReviewArtifact,
+} from "../../../src/site-review/artifacts.js";
 
 const directories: string[] = [];
 
@@ -49,5 +52,38 @@ describe("writeReviewArtifact", () => {
         content: Buffer.from("x"),
       }),
     ).rejects.toThrow("artifact name");
+  });
+
+  test("reads only a stored artifact whose hash still matches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "site-review-artifacts-"));
+    directories.push(root);
+    const artifact = await writeReviewArtifact({
+      root,
+      reviewId: "review-1",
+      agentId: "claude",
+      name: "desktop.png",
+      content: Buffer.from("screenshot"),
+    });
+
+    await expect(readReviewArtifact({ root, ...artifact })).resolves.toEqual(
+      Buffer.from("screenshot"),
+    );
+    await expect(
+      readReviewArtifact({
+        root,
+        relativePath: "review-1/claude/desktop.png",
+        sha256: "0".repeat(64),
+      }),
+    ).rejects.toThrow("hash mismatch");
+  });
+
+  test("rejects an artifact path that is not a scoped relative path", async () => {
+    await expect(
+      readReviewArtifact({
+        root: "C:/artifacts",
+        relativePath: "../outside.png",
+        sha256: "0".repeat(64),
+      }),
+    ).rejects.toThrow("relative path");
   });
 });

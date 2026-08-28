@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 const ScopeIdPattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ArtifactNamePattern = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
@@ -18,6 +18,10 @@ export interface StoredReviewArtifact {
   sha256: string;
 }
 
+export interface ReadReviewArtifactInput extends StoredReviewArtifact {
+  root: string;
+}
+
 function requireScopeId(value: string, label: string): void {
   if (!ScopeIdPattern.test(value)) throw new Error(`Invalid ${label}`);
 }
@@ -26,6 +30,33 @@ function requireArtifactName(value: string): void {
   if (!ArtifactNamePattern.test(value) || value.includes("..")) {
     throw new Error("Invalid artifact name");
   }
+}
+
+function pathFromRelativeArtifact(root: string, relativePath: string): string {
+  const parts = relativePath.split("/");
+  const [reviewId, agentId, name] = parts;
+  if (
+    parts.length !== 3 ||
+    reviewId === undefined ||
+    agentId === undefined ||
+    name === undefined
+  ) {
+    throw new Error("Invalid artifact relative path");
+  }
+  requireScopeId(reviewId, "review ID");
+  requireScopeId(agentId, "agent ID");
+  requireArtifactName(name);
+  const resolvedRoot = resolve(root);
+  const filePath = resolve(resolvedRoot, reviewId, agentId, name);
+  const difference = relative(resolvedRoot, filePath);
+  if (
+    difference === "" ||
+    isAbsolute(difference) ||
+    difference.startsWith("..")
+  ) {
+    throw new Error("Invalid artifact relative path");
+  }
+  return filePath;
 }
 
 export async function writeReviewArtifact(
@@ -45,4 +76,17 @@ export async function writeReviewArtifact(
     relativePath,
     sha256: createHash("sha256").update(input.content).digest("hex"),
   });
+}
+
+export async function readReviewArtifact(
+  input: ReadReviewArtifactInput,
+): Promise<Buffer> {
+  if (!/^[a-f0-9]{64}$/.test(input.sha256))
+    throw new Error("Invalid artifact hash");
+  const content = await readFile(
+    pathFromRelativeArtifact(input.root, input.relativePath),
+  );
+  const actual = createHash("sha256").update(content).digest("hex");
+  if (actual !== input.sha256) throw new Error("Artifact hash mismatch");
+  return content;
 }
