@@ -66,6 +66,28 @@ export function createSlashCommands(models: ProviderModels) {
     );
   addModelOption("codex_model", "Codex", models.codex.selections, debate);
   addModelOption("claude_model", "Claude", models.claude.selections, debate);
+  const reviewSite = new SlashCommandBuilder()
+    .setName("review-site")
+    .setDescription("Have both agents review a public website")
+    .addStringOption((option) =>
+      option
+        .setName("url")
+        .setDescription("Public HTTP(S) URL")
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("focus")
+        .setDescription("Optional review focus")
+        .setRequired(false),
+    );
+  addModelOption("codex_model", "Codex", models.codex.selections, reviewSite);
+  addModelOption(
+    "claude_model",
+    "Claude",
+    models.claude.selections,
+    reviewSite,
+  );
   return [
     new SlashCommandBuilder()
       .setName("projects")
@@ -84,6 +106,7 @@ export function createSlashCommands(models: ProviderModels) {
       ),
     ask,
     debate,
+    reviewSite,
     new SlashCommandBuilder()
       .setName("status")
       .setDescription("Show your active runs"),

@@ -87,6 +87,19 @@ describe("Discord command handler", () => {
       ),
     ).toMatchObject({ choices: [{ name: "sol", value: "sol" }] });
     expect(JSON.stringify(ask)).not.toContain("gpt-sol");
+    const reviewSite = commands.find(
+      (command) => command.name === "review-site",
+    );
+    expect(
+      reviewSite?.options?.find(
+        (option: { name: string }) => option.name === "url",
+      ),
+    ).toMatchObject({ required: true });
+    expect(
+      reviewSite?.options?.find(
+        (option: { name: string }) => option.name === "focus",
+      ),
+    ).toMatchObject({ required: false });
   });
 
   test("asks a selected agent after immediate defer and passes concrete classes", async () => {
