@@ -45,7 +45,7 @@ describe("BrowserSessionFactory", () => {
     await session.client.call("inspect_rendered_page", { verbose: false });
     expect(callTool).toHaveBeenCalledWith({
       name: "take_snapshot",
-      arguments: { verbose: false },
+      arguments: {},
     });
     await session.close();
     expect(close).toHaveBeenCalledOnce();

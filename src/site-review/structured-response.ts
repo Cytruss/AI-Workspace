@@ -9,7 +9,7 @@ const RecommendationIdSchema = z
 
 const ObservationSchema = z.object({
   id: ObservationIdSchema,
-  url: z.string().url().max(2_048),
+  url: z.url().max(2_048),
   title: z.string().max(500),
   viewport: z.enum(["desktop", "mobile"]),
   behavior: z.string().min(1).max(4_000),
