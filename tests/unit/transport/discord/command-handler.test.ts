@@ -141,6 +141,39 @@ describe("Discord command handler", () => {
     expect(port.edits).toHaveLength(1);
   });
 
+  test("dispatches a public website review without requiring an active project", async () => {
+    const review = vi.fn().mockResolvedValue({
+      reviewId: "review-1",
+      status: "completed",
+      results: {
+        codex: { summary: "Codex summary" },
+        claude: { summary: "Claude summary" },
+      },
+    });
+    const handler = createCommandHandler({
+      config,
+      projects: { list: () => [], get: vi.fn() },
+      projectRepository: { getActive: () => undefined, setActive: vi.fn() },
+      askService: { ask: vi.fn() },
+      debateService: { debate: vi.fn() },
+      siteReviewService: { review },
+      activeRuns: new ActiveRuns(),
+      sessions: { agentRuns: () => [] },
+    });
+    const port = interaction("review-site", {
+      url: "https://example.com/",
+      focus: "signup",
+    });
+
+    await handler(port);
+
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://example.com/", focus: "signup" }),
+    );
+    expect(port.deferred).toBe(1);
+    expect(port.edits).toHaveLength(1);
+  });
+
   test("rejects forged model classes before orchestration", async () => {
     const ask = vi.fn();
     const handler = createCommandHandler({
