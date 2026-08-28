@@ -5,6 +5,7 @@ export interface AppPaths {
   configFile: string;
   databaseFile: string;
   logDir: string;
+  artifactDir: string;
 }
 
 function requiredEnvironmentPath(
@@ -47,5 +48,6 @@ export function getAppPaths(
     configFile: pathApi.join(dataDir, "config.json"),
     databaseFile: pathApi.join(dataDir, "ai-workspace.sqlite"),
     logDir: pathApi.join(dataDir, "logs"),
+    artifactDir: pathApi.join(dataDir, "artifacts"),
   };
 }
