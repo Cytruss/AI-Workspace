@@ -20,6 +20,29 @@ const RAW_TOOL_NAMES: Readonly<Record<ReviewBrowserToolName, string>> = {
   read_network_summary: "list_network_requests",
 };
 
+function navigationArguments(
+  arguments_: Record<string, unknown>,
+): Record<string, unknown> {
+  if (typeof arguments_["url"] !== "string")
+    throw new Error("Review navigation requires a URL");
+  return {
+    type: "url",
+    url: arguments_["url"],
+    handleBeforeUnload: "dismiss",
+    timeout: 10_000,
+  };
+}
+
+function safeArguments(
+  tool: ReviewBrowserToolName,
+  arguments_: Record<string, unknown>,
+): Record<string, unknown> {
+  if (tool === "open_page") return navigationArguments(arguments_);
+  if (tool === "navigate_same_origin" || tool === "follow_visible_link")
+    return navigationArguments(arguments_);
+  return {};
+}
+
 export class ChromeDevtoolsClient {
   private readonly policy = new ReviewBrowserToolPolicy();
 
@@ -30,9 +53,10 @@ export class ChromeDevtoolsClient {
     arguments_: Record<string, unknown>,
   ): Promise<unknown> {
     this.policy.assertAllowed(tool);
+    const reviewTool = tool as ReviewBrowserToolName;
     return this.port.callTool({
-      name: RAW_TOOL_NAMES[tool as ReviewBrowserToolName],
-      arguments: arguments_,
+      name: RAW_TOOL_NAMES[reviewTool],
+      arguments: safeArguments(reviewTool, arguments_),
     });
   }
 }
