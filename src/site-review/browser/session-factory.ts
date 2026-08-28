@@ -1,4 +1,5 @@
 import { buildChromeDevtoolsArguments } from "./chrome-launch.js";
+import { ChromeDevtoolsClient } from "./chrome-devtools-client.js";
 
 const REQUIRED_RAW_TOOLS = [
   "list_pages",
@@ -10,8 +11,12 @@ const REQUIRED_RAW_TOOLS = [
   "list_network_requests",
 ] as const;
 
-interface RawBrowserConnection {
+export interface RawBrowserConnection {
   listTools(): Promise<readonly string[]>;
+  callTool(input: {
+    name: string;
+    arguments: Record<string, unknown>;
+  }): Promise<unknown>;
   close(): Promise<void>;
 }
 
@@ -37,9 +42,10 @@ export class BrowserSessionFactory {
     private readonly dependencies: BrowserSessionFactoryDependencies,
   ) {}
 
-  async create(input: {
-    logFile: string;
-  }): Promise<{ close(): Promise<void> }> {
+  async create(input: { logFile: string }): Promise<{
+    client: ChromeDevtoolsClient;
+    close(): Promise<void>;
+  }> {
     const connection = await this.dependencies.connect({
       command: process.execPath,
       args: [
@@ -55,7 +61,10 @@ export class BrowserSessionFactory {
           `Chrome DevTools MCP is missing required tool: ${missing}`,
         );
       }
-      return Object.freeze({ close: () => connection.close() });
+      return Object.freeze({
+        client: new ChromeDevtoolsClient(connection),
+        close: () => connection.close(),
+      });
     } catch (error) {
       await connection.close();
       throw error;
