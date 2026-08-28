@@ -106,6 +106,8 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
         "--sandbox",
         "read-only",
         "--config",
+        'windows.sandbox="elevated"',
+        "--config",
         'approval_policy="never"',
         "-C",
         process.cwd(),

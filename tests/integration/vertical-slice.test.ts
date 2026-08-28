@@ -449,6 +449,8 @@ describe("dual-agent vertical slice", () => {
             "--sandbox",
             "read-only",
             "--config",
+            'windows.sandbox="elevated"',
+            "--config",
             'approval_policy="never"',
           ]),
         );

@@ -40,6 +40,8 @@ export function buildCodexArguments(options: CodexArgumentOptions): string[] {
     "--sandbox",
     "read-only",
     "--config",
+    'windows.sandbox="elevated"',
+    "--config",
     'approval_policy="never"',
     "-C",
     options.projectRoot,
