@@ -28,6 +28,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isImpossibleSchema(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    isRecord(value["not"]) &&
+    Object.keys(value["not"]).length === 0
+  );
+}
+
 function strictCodexOutputSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(strictCodexOutputSchema);
   if (!isRecord(value)) return value;
@@ -40,8 +49,14 @@ function strictCodexOutputSchema(value: unknown): unknown {
         ? false
         : strictCodexOutputSchema(entry);
   }
-  const properties = schema["properties"];
-  if (isRecord(properties)) {
+  const rawProperties = schema["properties"];
+  if (isRecord(rawProperties)) {
+    const properties = Object.fromEntries(
+      Object.entries(rawProperties).filter(
+        ([, property]) => !isImpossibleSchema(property),
+      ),
+    );
+    schema["properties"] = properties;
     const propertyNames = Object.keys(properties);
     const required = Array.isArray(schema["required"])
       ? schema["required"].filter(

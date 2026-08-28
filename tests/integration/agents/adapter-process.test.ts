@@ -133,6 +133,8 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
     expect(JSON.stringify(evidenceItems?.properties?.lineStart)).toContain(
       '"type":"null"',
     );
+    expect(schema.properties).not.toHaveProperty("stances");
+    expect(schema.properties).not.toHaveProperty("newEvidence");
     expect(invoke?.args).toEqual(
       expect.arrayContaining([
         "exec",
