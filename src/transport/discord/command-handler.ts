@@ -4,6 +4,7 @@ import { DebateService } from "../../debate/debate-service.js";
 import type { DebateReport } from "../../debate/types.js";
 import { AskService } from "../../orchestrator/ask-service.js";
 import { ActiveRuns } from "../../orchestrator/active-runs.js";
+import type { SiteReviewService } from "../../site-review/site-review-service.js";
 import type { RegisteredProject } from "../../projects/project-service.js";
 import type { ProjectScope } from "../../storage/project-repository.js";
 import type {
@@ -76,6 +77,7 @@ export interface CommandHandlerDependencies {
     persistedReport?(interactionId: string): DebateReport | undefined;
   };
   activeRuns: ActiveRuns;
+  siteReviewService?: Pick<SiteReviewService, "review">;
   sessions?: {
     agentRuns(sessionId: string): readonly AgentRunRecord[];
     get?(sessionId: string): SessionRecord;
@@ -171,7 +173,9 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
       return;
     }
     const deferred =
-      port.commandName === "ask" || port.commandName === "debate";
+      port.commandName === "ask" ||
+      port.commandName === "debate" ||
+      port.commandName === "review-site";
     if (deferred) await port.deferReply();
     try {
       if (port.commandName === "projects") {
@@ -195,6 +199,25 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
         const project = dependencies.projects.get(required(port, "project"));
         dependencies.projectRepository.setActive(authorized, project.id);
         await port.reply(message(`Active project switched to ${project.id}.`));
+        return;
+      }
+      if (port.commandName === "review-site") {
+        if (dependencies.siteReviewService === undefined)
+          throw new DiscordCommandError(
+            "Website reviews are not available yet.",
+          );
+        const focus = port.getString("focus")?.trim();
+        const report = await dependencies.siteReviewService.review({
+          interactionId: port.interactionId,
+          scope: authorized,
+          url: required(port, "url"),
+          ...(focus === undefined || focus === "" ? {} : { focus }),
+        });
+        await port.editReply(
+          message(
+            `Website review ${report.status}. Codex: ${report.results.codex?.summary ?? "unavailable"}; Claude: ${report.results.claude?.summary ?? "unavailable"}`,
+          ),
+        );
         return;
       }
       if (port.commandName === "status") {
