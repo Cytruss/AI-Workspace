@@ -12,6 +12,7 @@ function interaction(
 ): InteractionPort & {
   replies: unknown[];
   edits: unknown[];
+  followUps: unknown[];
   deferred: number;
 } {
   const fake = {
@@ -22,6 +23,7 @@ function interaction(
     userId: "user",
     replies: [] as unknown[],
     edits: [] as unknown[],
+    followUps: [] as unknown[],
     deferred: 0,
     getString: (name: string) => values[name],
     deferReply: () =>
@@ -35,6 +37,10 @@ function interaction(
     editReply: (content: unknown) =>
       Promise.resolve().then(() => {
         fake.edits.push(content);
+      }),
+    followUp: (content: unknown) =>
+      Promise.resolve().then(() => {
+        fake.followUps.push(content);
       }),
   };
   return fake;
@@ -324,6 +330,73 @@ describe("Discord command handler", () => {
     await handler(port);
     expect(debate).not.toHaveBeenCalled();
     expect(JSON.stringify(port.edits)).toContain("persisted-debate");
+  });
+
+  test("sends additional debate report pages as follow-ups", async () => {
+    const claims = Array.from({ length: 10 }, (_, index) => ({
+      id: `claim-${String(index)}`,
+      text: "A detailed claim ".repeat(50),
+      material: true,
+      evidenceIds: [],
+      origins: [],
+    }));
+    const persistedReport = {
+      sessionId: "split-debate",
+      projectId: "demo",
+      status: "completed",
+      classification: "DEBATE",
+      rounds: [],
+      analyses: [],
+      verdicts: claims.map((claim) => ({
+        claimId: claim.id,
+        classification: "CONSENSUS",
+        support: "VERIFIED",
+        finalStances: [],
+        evidence: [],
+        provenance: [],
+        counts: { accept: 2, dispute: 0, uncertain: 0 },
+      })),
+      consensus: claims.map((claim) => ({
+        claimId: claim.id,
+        classification: "CONSENSUS",
+        support: "VERIFIED",
+        finalStances: [],
+        evidence: [],
+        provenance: [],
+        counts: { accept: 2, dispute: 0, uncertain: 0 },
+      })),
+      disagreements: [],
+      rejected: [],
+      unresolved: [],
+      board: { version: 1, claims, evidence: [] },
+    } as never;
+    const handler = createCommandHandler({
+      config,
+      projects: { list: () => [], get: vi.fn() },
+      projectRepository: {
+        getActive: () => ({ id: "demo", name: "Demo", root: "x" }),
+        setActive: vi.fn(),
+      },
+      askService: { ask: vi.fn() },
+      debateService: {
+        debate: vi.fn(),
+        persistedReport: () => persistedReport,
+      },
+      activeRuns: new ActiveRuns(),
+      sessions: { agentRuns: () => [] },
+    });
+    const port = interaction("debate", { topic: "Repeat" });
+
+    await handler(port);
+
+    const delivered = [...port.edits, ...port.followUps] as {
+      content: string;
+    }[];
+    expect(port.edits).toHaveLength(1);
+    expect(port.followUps.length).toBeGreaterThan(0);
+    expect(delivered.every((payload) => payload.content.length <= 1_900)).toBe(
+      true,
+    );
   });
 
   test("uses a generic safe fallback for unexpected errors", async () => {

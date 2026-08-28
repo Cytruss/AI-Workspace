@@ -82,6 +82,7 @@ function interaction(name: string, values: Record<string, string> = {}) {
       Promise.resolve().then(() => void port.replies.push(value)),
     editReply: (value) =>
       Promise.resolve().then(() => void port.edits.push(value)),
+    followUp: () => Promise.resolve(),
   };
   return port;
 }

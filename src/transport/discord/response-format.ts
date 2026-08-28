@@ -298,10 +298,94 @@ function formatDebateAnalysisContent(content: string | undefined): string {
   return content;
 }
 
-export function formatDebateReport(
+function claimText(
+  verdict: DebateReport["verdicts"][number],
+  board: DebateReport["board"],
+): string {
+  return (
+    board?.claims.find((claim) => claim.id === verdict.claimId)?.text ??
+    "Claim text unavailable"
+  );
+}
+
+function summaryClaims(
+  verdicts: DebateReport["verdicts"],
+  board: DebateReport["board"],
+  empty: string,
+): string[] {
+  return verdicts.length === 0
+    ? [empty]
+    : verdicts.map((verdict) => `- ${claimText(verdict, board)}`);
+}
+
+function debateSummary(report: DebateReport): string {
+  const counts = {
+    agreed: report.consensus.length,
+    disputed: report.disagreements.length,
+    uncertain: report.unresolved.length,
+    rejected: report.rejected.length,
+  };
+  return [
+    "## What happened",
+    `The agents reviewed ${String(report.verdicts.length)} claim${
+      report.verdicts.length === 1 ? "" : "s"
+    }. They reached the same conclusion on ${String(counts.agreed)} and both rejected ${String(counts.rejected)}.`,
+    "",
+    "### What both agents agree on",
+    ...summaryClaims(
+      report.consensus,
+      report.board,
+      "- No shared conclusions.",
+    ),
+    "",
+    "### Where they see it differently",
+    ...summaryClaims(
+      report.disagreements,
+      report.board,
+      "- No material disagreements.",
+    ),
+    "",
+    "### What remains uncertain",
+    ...summaryClaims(
+      report.unresolved,
+      report.board,
+      "- No unresolved claims.",
+    ),
+    "",
+    `Result: Agreed: ${String(counts.agreed)}; Different interpretations: ${String(counts.disputed)}; Uncertain: ${String(counts.uncertain)}; Rejected: ${String(counts.rejected)}.`,
+    "Detailed evidence and reasoning are attached.",
+  ].join("\n");
+}
+
+function splitDiscordText(content: string): readonly string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (const line of content.split("\n")) {
+    let remaining = line;
+    do {
+      const separator = current.length === 0 ? "" : "\n";
+      const space = LIMIT - current.length - separator.length;
+      if (remaining.length <= space) {
+        current += `${separator}${remaining}`;
+        remaining = "";
+      } else if (current.length > 0) {
+        parts.push(current);
+        current = "";
+      } else {
+        const splitAt = Math.max(1, remaining.lastIndexOf(" ", LIMIT));
+        parts.push(remaining.slice(0, splitAt));
+        remaining = remaining.slice(splitAt).trimStart();
+      }
+    } while (remaining.length > 0);
+  }
+  if (current.length > 0) parts.push(current);
+  return parts;
+}
+
+export function formatDebateReportParts(
   report: DebateReport,
   runs: readonly AgentRunRecord[] = [],
-): DiscordPayload {
+): readonly DiscordPayload[] {
   const frozen = (["codex", "claude"] as const).map((agentId) => {
     const execution = runs.find(
       (run) => run.agentId === agentId,
@@ -379,5 +463,24 @@ export function formatDebateReport(
         ];
       }),
   ];
-  return payload(lines.join("\n"), `debate-${report.sessionId}.txt`);
+  return splitDiscordText(debateSummary(report)).map((content, index) =>
+    index === 0
+      ? {
+          content,
+          files: [
+            {
+              attachment: Buffer.from(lines.join("\n"), "utf8"),
+              name: `debate-${report.sessionId}.txt`,
+            },
+          ],
+        }
+      : { content },
+  );
+}
+
+export function formatDebateReport(
+  report: DebateReport,
+  runs: readonly AgentRunRecord[] = [],
+): DiscordPayload {
+  return formatDebateReportParts(report, runs)[0] as DiscordPayload;
 }
