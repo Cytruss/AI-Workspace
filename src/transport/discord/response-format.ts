@@ -255,6 +255,49 @@ function verdictLines(
   return lines;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatDebateAnalysisContent(content: string | undefined): string {
+  if (content === undefined) return "No content";
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (!isRecord(parsed)) return content;
+    const phase = parsed["phase"];
+    const initialClaims = parsed["claims"];
+    if (phase === "initial" && Array.isArray(initialClaims)) {
+      const claims = initialClaims.flatMap((claim): string[] => {
+        if (!isRecord(claim)) return [];
+        const text = claim["text"];
+        if (typeof text !== "string") return [];
+        const material = claim["material"] === true;
+        const localEvidenceIds = claim["evidenceLocalIds"];
+        const evidence = Array.isArray(localEvidenceIds)
+          ? localEvidenceIds.filter(
+              (id): id is string => typeof id === "string",
+            )
+          : [];
+        return [
+          `- [${material ? "material" : "context"}] ${text} (evidence: ${
+            evidence.join(", ") || "none"
+          })`,
+        ];
+      });
+      const evidence = parsed["evidence"];
+      const evidenceCount = Array.isArray(evidence) ? evidence.length : 0;
+      return [
+        "Initial analysis:",
+        ...(claims.length === 0 ? ["- No claims supplied."] : claims),
+        `Evidence cited: ${String(evidenceCount)}`,
+      ].join("\n");
+    }
+  } catch {
+    // Ordinary provider display content is not JSON.
+  }
+  return content;
+}
+
 export function formatDebateReport(
   report: DebateReport,
   runs: readonly AgentRunRecord[] = [],
@@ -292,7 +335,7 @@ export function formatDebateReport(
           (execution !== undefined && execution.requestedClass === undefined));
       return `${agentName(analysis.agentId)} (${analysis.status}): ${
         display
-          ? (analysis.content ?? "No content")
+          ? formatDebateAnalysisContent(analysis.content)
           : "Content withheld because model verification is unverified"
       }${
         display && execution.verification === "unverified"

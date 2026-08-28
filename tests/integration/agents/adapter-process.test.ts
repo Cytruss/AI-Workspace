@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -81,8 +82,23 @@ function request(
 describe("hardened adapter lifecycle with fake Node providers", () => {
   test("Codex uses a real bounded process with private schema transport and inert stdin", async () => {
     const calls: ProcessRequest[] = [];
+    let transportedSchema: unknown;
     const adapter = new CodexAdapter(config, {
-      runProcess: fixtureRunner(codexCli, calls),
+      runProcess: async (processRequest) => {
+        calls.push(processRequest);
+        const schemaFlag = processRequest.args.indexOf("--output-schema");
+        if (schemaFlag >= 0) {
+          const schemaPath = processRequest.args[schemaFlag + 1];
+          if (schemaPath === undefined)
+            throw new Error("Codex invocation did not include a schema path");
+          transportedSchema = JSON.parse(readFileSync(schemaPath, "utf8"));
+        }
+        return runProcess({
+          ...processRequest,
+          command: process.execPath,
+          args: [codexCli, ...processRequest.args],
+        });
+      },
       captureGitIntegrity: () => Promise.resolve(snapshot),
     });
     const result = await adapter.run(
@@ -96,6 +112,10 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
       structured: { phase: "initial" },
     });
     expect(invoke?.stdin).toBe("inert $(value)");
+    expect(transportedSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+    });
     expect(invoke?.args).toEqual(
       expect.arrayContaining([
         "exec",

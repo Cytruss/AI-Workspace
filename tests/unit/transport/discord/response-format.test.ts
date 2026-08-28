@@ -312,6 +312,45 @@ describe("Discord response formatting", () => {
     );
   });
 
+  test("renders serialized initial debate analysis as readable claims", () => {
+    const payload = formatDebateReport(
+      {
+        sessionId: "initial-analysis",
+        status: "partial",
+        classification: "DEBATE_NOT_ESTABLISHED",
+        projectId: "demo",
+        rounds: [],
+        verdicts: [],
+        consensus: [],
+        disagreements: [],
+        rejected: [],
+        unresolved: [],
+        analyses: [
+          {
+            agentId: "claude",
+            runId: "run-claude",
+            status: "completed",
+            content:
+              '{"phase":"initial","claims":[{"localId":"c1","text":"Codex uses a process sandbox.","material":true,"evidenceLocalIds":["e1"]}],"evidence":[{"localId":"e1","trackedPath":"src/agents/codex-adapter.ts"}]}',
+          },
+        ],
+      } as never,
+      [
+        {
+          id: "run-claude",
+          agentId: "claude",
+          modelExecution: { observedModelIds: [], verification: "unverified" },
+        },
+      ] as never,
+    );
+    expect(payload.content).toContain("Initial analysis:");
+    expect(payload.content).toContain(
+      "- [material] Codex uses a process sandbox. (evidence: e1)",
+    );
+    expect(payload.content).toContain("Evidence cited: 1");
+    expect(payload.content).not.toContain('{"phase":"initial"');
+  });
+
   test("renders each verdict's evidence and provenance deterministically", () => {
     const verdict = {
       claimId: "claim-a",
