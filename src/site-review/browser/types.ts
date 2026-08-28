@@ -10,6 +10,8 @@ export const REVIEW_BROWSER_TOOL_NAMES = Object.freeze([
   "read_network_summary",
 ] as const);
 
+export type ReviewBrowserToolName = (typeof REVIEW_BROWSER_TOOL_NAMES)[number];
+
 export interface ReviewBrowserBinding {
   configHome: string;
   mcpConfigPath: string;
