@@ -116,6 +116,23 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
       type: "object",
       additionalProperties: false,
     });
+    const schema = transportedSchema as {
+      properties?: {
+        evidence?: {
+          items?: {
+            required?: unknown;
+            properties?: { lineStart?: unknown; lineEnd?: unknown };
+          };
+        };
+      };
+    };
+    const evidenceItems = schema.properties?.evidence?.items;
+    expect(evidenceItems?.required).toEqual(
+      expect.arrayContaining(["lineStart", "lineEnd"]),
+    );
+    expect(JSON.stringify(evidenceItems?.properties?.lineStart)).toContain(
+      '"type":"null"',
+    );
     expect(invoke?.args).toEqual(
       expect.arrayContaining([
         "exec",
@@ -177,6 +194,26 @@ describe("hardened adapter lifecycle with fake Node providers", () => {
     expect(invoke?.args).not.toEqual(
       expect.arrayContaining(["Bash", "Edit", "Write", "Notebook"]),
     );
+  });
+
+  test("Codex accepts API-required null placeholders for optional response fields", async () => {
+    const adapter = new CodexAdapter(config, {
+      runProcess: fixtureRunner(codexCli, []),
+      captureGitIntegrity: () => Promise.resolve(snapshot),
+    });
+    await expect(
+      adapter.run(request("NULL_OPTIONALS"), new AbortController().signal),
+    ).resolves.toMatchObject({
+      status: "completed",
+      structured: {
+        evidence: [
+          {
+            localId: "codex-evidence",
+            trackedPath: "src/example.ts",
+          },
+        ],
+      },
+    });
   });
 
   test.each([

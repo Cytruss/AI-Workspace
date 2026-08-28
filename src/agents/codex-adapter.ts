@@ -40,7 +40,33 @@ function strictCodexOutputSchema(value: unknown): unknown {
         ? false
         : strictCodexOutputSchema(entry);
   }
+  const properties = schema["properties"];
+  if (isRecord(properties)) {
+    const propertyNames = Object.keys(properties);
+    const required = Array.isArray(schema["required"])
+      ? schema["required"].filter(
+          (name): name is string => typeof name === "string",
+        )
+      : [];
+    for (const name of propertyNames) {
+      if (required.includes(name)) continue;
+      properties[name] = {
+        anyOf: [properties[name], { type: "null" }],
+      };
+    }
+    schema["required"] = propertyNames;
+  }
   return schema;
+}
+
+function stripNullObjectProperties(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNullObjectProperties);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entry]) => entry !== null)
+      .map(([key, entry]) => [key, stripNullObjectProperties(entry)]),
+  );
 }
 
 export interface CodexArgumentOptions {
@@ -298,7 +324,7 @@ export class CodexAdapter implements AgentAdapter {
           processResult,
         );
       const structured = request.responseSchema.parse(
-        parseCodexJsonl(processResult.stdout),
+        stripNullObjectProperties(parseCodexJsonl(processResult.stdout)),
       );
       return {
         agentId: this.id,

@@ -50,7 +50,17 @@ else {
                   },
                 ]
               : [],
-          evidence: [],
+          evidence:
+            stdin === "NULL_OPTIONALS"
+              ? [
+                  {
+                    localId: "codex-evidence",
+                    trackedPath: "src/example.ts",
+                    lineStart: null,
+                    lineEnd: null,
+                  },
+                ]
+              : [],
         }
       : {
           phase,
