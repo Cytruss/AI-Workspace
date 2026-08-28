@@ -435,6 +435,17 @@ Verdict: CONSENSUS; evidence: SUPPORTED
 
 The full report also contains `DISAGREEMENT`, `REJECTED`, and `UNRESOLVED` sections, the two independent analyses, and mechanically resolved evidence/provenance. Evidence status verifies cited bytes and paths; it does not prove semantic truth. Add `project:project-one` only when you want to debate a registered project other than the active one.
 
+##### What a debate result looks like
+
+![Discord debate report showing an agreed result, one uncertainty, and a linked audit attachment](docs/assets/debate-report-example.png)
+
+Read the message from top to bottom:
+
+- **What happened** gives the number of claims reviewed and the high-level outcome.
+- **What both agents agree on**, **Where they see it differently**, and **What remains uncertain** explain the result in plain language.
+- **Result** is the one-line count of agreed, disputed, uncertain, and rejected claims.
+- The attached text file is the complete audit trail: the individual analyses, evidence IDs, provenance, and technical detail. When the readable report is longer than one Discord message, the bot sends continuation messages so no claims are silently omitted.
+
 #### `/status` — check active and recent work
 
 ```text
