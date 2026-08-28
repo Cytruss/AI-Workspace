@@ -34,4 +34,28 @@ describe("SiteReviewService", () => {
     ).resolves.toMatchObject({ status: "completed" });
     database.close();
   });
+
+  test("persists cancellation when an active review is stopped", async () => {
+    const database = openDatabase(":memory:");
+    migrateDatabase(database);
+    const activeRuns = new ActiveRuns();
+    const service = new SiteReviewService({
+      reviews: new SiteReviewRepository(database),
+      policy: new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] }),
+      activeRuns,
+      runAgent: async ({ signal }) => {
+        signal.throwIfAborted();
+        activeRuns.cancel(activeRuns.list()[0]?.runId ?? "missing", "u");
+        throw new DOMException("Cancelled", "AbortError");
+      },
+    });
+    await expect(
+      service.review({
+        interactionId: "i2",
+        scope: { guildId: "g", channelId: "c", userId: "u" },
+        url: "https://example.com/",
+      }),
+    ).resolves.toMatchObject({ status: "cancelled" });
+    database.close();
+  });
 });

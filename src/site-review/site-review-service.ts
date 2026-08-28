@@ -65,6 +65,14 @@ export class SiteReviewService {
           }),
         ),
       );
+      if (controller.signal.aborted) {
+        this.dependencies.reviews.markCancelled(review.id);
+        return {
+          reviewId: review.id,
+          status: "cancelled",
+          results: { codex: undefined, claude: undefined },
+        };
+      }
       const codex =
         settled[0]?.status === "fulfilled" ? settled[0].value : undefined;
       const claude =
