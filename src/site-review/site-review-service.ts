@@ -3,6 +3,7 @@ import type { SiteReviewAgentResponse } from "./structured-response.js";
 import { UrlPolicy } from "./url-policy.js";
 import type { SiteReviewRepository } from "../storage/site-review-repository.js";
 import type { ProjectScope } from "../storage/project-repository.js";
+import type { ActiveRuns } from "../orchestrator/active-runs.js";
 
 export interface SiteReviewInput {
   interactionId: string;
@@ -23,6 +24,7 @@ export interface SiteReviewReport {
 export interface SiteReviewServiceDependencies {
   reviews: SiteReviewRepository;
   policy: UrlPolicy;
+  activeRuns: ActiveRuns;
   runAgent(input: {
     agentId: "codex" | "claude";
     url: string;
@@ -47,45 +49,54 @@ export class SiteReviewService {
     if (review.status !== "queued") throw new Error("INTERACTION_IN_PROGRESS");
     this.dependencies.reviews.markRunning(review.id);
     const controller = new AbortController();
-    const settled = await Promise.allSettled(
-      (["codex", "claude"] as const).map((agentId) =>
-        this.dependencies.runAgent({
-          agentId,
-          url: target.canonicalUrl,
-          ...(input.focus === undefined ? {} : { focus: input.focus }),
-          signal: controller.signal,
-        }),
-      ),
+    this.dependencies.activeRuns.register(
+      review.id,
+      input.scope.userId,
+      controller,
     );
-    const codex =
-      settled[0]?.status === "fulfilled" ? settled[0].value : undefined;
-    const claude =
-      settled[1]?.status === "fulfilled" ? settled[1].value : undefined;
-    if (codex !== undefined && claude !== undefined) {
-      this.dependencies.reviews.markCompleted(review.id);
-      return {
-        reviewId: review.id,
-        status: "completed",
-        results: { codex, claude },
-        comparison: compareSiteReviews(
-          { agentId: "codex", response: codex },
-          { agentId: "claude", response: claude },
+    try {
+      const settled = await Promise.allSettled(
+        (["codex", "claude"] as const).map((agentId) =>
+          this.dependencies.runAgent({
+            agentId,
+            url: target.canonicalUrl,
+            ...(input.focus === undefined ? {} : { focus: input.focus }),
+            signal: controller.signal,
+          }),
         ),
-      };
-    }
-    if (codex !== undefined || claude !== undefined) {
-      this.dependencies.reviews.markPartial(review.id);
+      );
+      const codex =
+        settled[0]?.status === "fulfilled" ? settled[0].value : undefined;
+      const claude =
+        settled[1]?.status === "fulfilled" ? settled[1].value : undefined;
+      if (codex !== undefined && claude !== undefined) {
+        this.dependencies.reviews.markCompleted(review.id);
+        return {
+          reviewId: review.id,
+          status: "completed",
+          results: { codex, claude },
+          comparison: compareSiteReviews(
+            { agentId: "codex", response: codex },
+            { agentId: "claude", response: claude },
+          ),
+        };
+      }
+      if (codex !== undefined || claude !== undefined) {
+        this.dependencies.reviews.markPartial(review.id);
+        return {
+          reviewId: review.id,
+          status: "partial",
+          results: { codex, claude },
+        };
+      }
+      this.dependencies.reviews.markFailed(review.id);
       return {
         reviewId: review.id,
-        status: "partial",
+        status: "failed",
         results: { codex, claude },
       };
+    } finally {
+      this.dependencies.activeRuns.unregister(review.id);
     }
-    this.dependencies.reviews.markFailed(review.id);
-    return {
-      reviewId: review.id,
-      status: "failed",
-      results: { codex, claude },
-    };
   }
 }

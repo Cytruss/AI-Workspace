@@ -4,6 +4,7 @@ import { UrlPolicy } from "../../../src/site-review/url-policy.js";
 import { SiteReviewRepository } from "../../../src/storage/site-review-repository.js";
 import { openDatabase } from "../../../src/storage/database.js";
 import { migrateDatabase } from "../../../src/storage/migrations.js";
+import { ActiveRuns } from "../../../src/orchestrator/active-runs.js";
 
 const response = (summary: string) => ({
   phase: "site-review" as const,
@@ -21,6 +22,7 @@ describe("SiteReviewService", () => {
     const service = new SiteReviewService({
       reviews: new SiteReviewRepository(database),
       policy: new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] }),
+      activeRuns: new ActiveRuns(),
       runAgent: async ({ agentId }) => response(agentId),
     });
     await expect(
