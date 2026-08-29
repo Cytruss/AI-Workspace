@@ -67,7 +67,9 @@ describe("ReviewNavigationGateway", () => {
       currentUrl: async () => "https://other.example/landing",
     });
 
-    await expect(gateway.navigate("https://example.com/pricing")).rejects.toMatchObject({
+    await expect(
+      gateway.navigate("https://example.com/pricing"),
+    ).rejects.toMatchObject({
       code: "SITE_REDIRECT_BLOCKED",
     });
     expect(navigate).toHaveBeenCalledWith("https://example.com/pricing");
@@ -87,9 +89,15 @@ describe("ReviewBrowserGateway", () => {
           : { content: [] },
       ),
     };
-    const policy = new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] });
+    const policy = new UrlPolicy({
+      resolveHost: async () => ["93.184.216.34"],
+    });
     const initial = await policy.validateInitial("https://example.com/");
-    const gateway = new ReviewBrowserGateway({ client, urlPolicy: policy, initial });
+    const gateway = new ReviewBrowserGateway({
+      client,
+      urlPolicy: policy,
+      initial,
+    });
 
     await gateway.call("open_page", { url: "https://example.com/pricing" });
 

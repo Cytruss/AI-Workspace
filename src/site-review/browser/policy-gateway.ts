@@ -12,7 +12,8 @@ interface ReviewBrowserPort {
 function selectedPageUrl(value: unknown): string {
   if (typeof value !== "object" || value === null)
     throw new Error("Review browser did not report the selected page");
-  const structured = (value as { structuredContent?: unknown }).structuredContent;
+  const structured = (value as { structuredContent?: unknown })
+    .structuredContent;
   if (typeof structured !== "object" || structured === null)
     throw new Error("Review browser did not report the selected page");
   const pages = (structured as { pages?: unknown }).pages;
@@ -102,13 +103,17 @@ export class ReviewBrowserGateway {
     this.navigation = new ReviewNavigationGateway({
       policy: dependencies.urlPolicy,
       initial: dependencies.initial,
-      navigate: (url) => dependencies.client.call("navigate_same_origin", { url }),
+      navigate: (url) =>
+        dependencies.client.call("navigate_same_origin", { url }),
       currentUrl: async () =>
         selectedPageUrl(await dependencies.client.call("list_pages", {})),
     });
   }
 
-  async call(tool: string, arguments_: Record<string, unknown>): Promise<unknown> {
+  async call(
+    tool: string,
+    arguments_: Record<string, unknown>,
+  ): Promise<unknown> {
     this.policy.assertAllowed(tool);
     if (
       tool === "open_page" ||

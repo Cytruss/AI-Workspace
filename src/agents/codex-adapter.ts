@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -14,6 +14,9 @@ import {
 } from "./agent-registry.js";
 import { requireHelpFlags } from "./help-capabilities.js";
 import { buildSafeEnvironment } from "./safe-environment.js";
+import type { ReviewBrowserBinding } from "../site-review/browser/types.js";
+import { renderCodexReviewMcpConfig } from "../site-review/browser/provider-binding.js";
+import type { SiteReviewAgentResponse } from "../site-review/structured-response.js";
 import {
   type AgentAdapter,
   type AgentCapabilities,
@@ -125,6 +128,19 @@ export interface CodexReviewArgumentOptions {
   workingDirectory: string;
   schemaPath: string;
   modelSelection?: ResolvedModelSelection | undefined;
+}
+
+export interface CodexReviewRequest {
+  workingDirectory: string;
+  prompt: string;
+  responseSchema: z.ZodType<SiteReviewAgentResponse>;
+  browser: Pick<ReviewBrowserBinding, "gateway" | "toolNames">;
+}
+
+export interface CodexReviewResult {
+  status: AgentResult["status"];
+  response?: SiteReviewAgentResponse;
+  diagnostics: readonly string[];
 }
 
 export function buildCodexReviewArguments(
@@ -395,6 +411,71 @@ export class CodexAdapter implements AgentAdapter {
       return this.failed(request, 0, [
         error instanceof Error ? error.message : "Codex adapter failed",
       ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true, maxRetries: 0 });
+    }
+  }
+
+  async runReview(
+    request: CodexReviewRequest,
+    signal: AbortSignal,
+  ): Promise<CodexReviewResult> {
+    const capabilities = await this.probe();
+    if (!capabilities.available)
+      return { status: "failed", diagnostics: capabilities.diagnostics };
+    const directory = await mkdtemp(
+      join(tmpdir(), "ai-workspace-codex-review-"),
+    );
+    const home = join(directory, "home");
+    const schemaPath = join(directory, "response-schema.json");
+    try {
+      await mkdir(home, { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(home, "config.toml"),
+        renderCodexReviewMcpConfig(request.browser),
+        { encoding: "utf8", mode: 0o600, flag: "wx" },
+      );
+      await writeFile(
+        schemaPath,
+        JSON.stringify(
+          strictCodexOutputSchema(z.toJSONSchema(request.responseSchema)),
+        ),
+        { encoding: "utf8", mode: 0o600, flag: "wx" },
+      );
+      const result = await this.process({
+        command: this.config.command,
+        args: buildCodexReviewArguments({
+          workingDirectory: request.workingDirectory,
+          schemaPath,
+        }),
+        cwd: request.workingDirectory,
+        stdin: request.prompt,
+        env: {
+          ...buildSafeEnvironment(process.env, ["OPENAI_API_KEY"]),
+          CODEX_HOME: home,
+        },
+        timeoutMs: this.config.timeoutMs,
+        maxOutputBytes: this.config.maxOutputBytes,
+        signal,
+      });
+      const diagnostics = [result.stdout, result.stderr].filter(
+        (value) => value !== "",
+      );
+      if (resultStatus(result) !== "completed")
+        return { status: resultStatus(result), diagnostics };
+      const structured = request.responseSchema.parse(
+        stripNullObjectProperties(parseCodexJsonl(result.stdout)),
+      );
+      return { status: "completed", response: structured, diagnostics };
+    } catch (error) {
+      return {
+        status: "failed",
+        diagnostics: [
+          error instanceof Error
+            ? error.message
+            : "Codex review adapter failed",
+        ],
+      };
     } finally {
       await rm(directory, { recursive: true, force: true, maxRetries: 0 });
     }
