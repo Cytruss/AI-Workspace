@@ -29,7 +29,13 @@ describe("SQLite database", () => {
     migrateDatabase(database);
     expect(
       database.prepare("SELECT version FROM schema_migrations").all(),
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+    ).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+      { version: 4 },
+      { version: 5 },
+    ]);
     expect(() =>
       database
         .prepare("INSERT INTO active_projects VALUES (?, ?, ?, ?)")

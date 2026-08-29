@@ -52,6 +52,91 @@ DROP TABLE evidence_origins;
 ALTER TABLE evidence_origins_v4 RENAME TO evidence_origins;
 `;
 
+const SITE_REVIEW_SCHEMA = `
+CREATE TABLE site_reviews (
+  id TEXT PRIMARY KEY,
+  interaction_id TEXT NOT NULL UNIQUE,
+  guild_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  initial_url TEXT NOT NULL,
+  focus TEXT,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','completed','partial','failed','cancelled')),
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  CHECK ((status='queued' AND started_at IS NULL AND finished_at IS NULL) OR (status='running' AND started_at IS NOT NULL AND finished_at IS NULL) OR (status IN ('completed','partial') AND started_at IS NOT NULL AND finished_at IS NOT NULL) OR (status IN ('failed','cancelled') AND finished_at IS NOT NULL))
+);
+CREATE TABLE site_review_agent_runs (
+  id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL REFERENCES site_reviews(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL CHECK (agent_id IN ('codex','claude')),
+  requested_model_class TEXT,
+  requested_model_id TEXT,
+  requested_effort TEXT,
+  observed_model_ids_json TEXT NOT NULL,
+  model_verification TEXT NOT NULL CHECK (model_verification IN ('verified','unverified')),
+  gateway_session_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running','completed','failed','cancelled')),
+  response_json TEXT,
+  diagnostics_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  finished_at TEXT,
+  UNIQUE (review_id, agent_id),
+  CHECK ((status='running' AND finished_at IS NULL) OR (status<>'running' AND finished_at IS NOT NULL))
+);
+CREATE TABLE site_observations (
+  id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL REFERENCES site_reviews(id) ON DELETE CASCADE,
+  agent_run_id TEXT NOT NULL REFERENCES site_review_agent_runs(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (id, review_id),
+  UNIQUE (id, agent_run_id)
+);
+CREATE TABLE site_artifacts (
+  id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL REFERENCES site_reviews(id) ON DELETE CASCADE,
+  agent_run_id TEXT NOT NULL REFERENCES site_review_agent_runs(id) ON DELETE CASCADE,
+  observation_id TEXT REFERENCES site_observations(id) ON DELETE SET NULL,
+  relative_path TEXT NOT NULL,
+  sha256 TEXT NOT NULL CHECK (length(sha256)=64),
+  mime_type TEXT NOT NULL,
+  byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
+  created_at TEXT NOT NULL,
+  UNIQUE (review_id, relative_path)
+);
+CREATE TABLE site_findings (
+  id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL REFERENCES site_reviews(id) ON DELETE CASCADE,
+  agent_run_id TEXT NOT NULL REFERENCES site_review_agent_runs(id) ON DELETE CASCADE,
+  category TEXT NOT NULL CHECK (category IN ('purpose','functional','visual','accessibility')),
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE site_uncertainties (
+  id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL REFERENCES site_reviews(id) ON DELETE CASCADE,
+  agent_run_id TEXT NOT NULL REFERENCES site_review_agent_runs(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE site_recommendations (
+  id TEXT PRIMARY KEY,
+  review_id TEXT NOT NULL REFERENCES site_reviews(id) ON DELETE CASCADE,
+  agent_run_id TEXT NOT NULL REFERENCES site_review_agent_runs(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE site_review_reports (
+  review_id TEXT PRIMARY KEY REFERENCES site_reviews(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL,
+  content_hash TEXT NOT NULL CHECK (length(content_hash)=64),
+  created_at TEXT NOT NULL
+);
+`;
+
 export function migrateDatabase(database: SqliteDatabase): void {
   database.transaction(() => {
     database.exec(
@@ -105,6 +190,17 @@ export function migrateDatabase(database: SqliteDatabase): void {
           "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
         )
         .run(4, new Date().toISOString());
+    }
+    const siteReviewsApplied = database
+      .prepare("SELECT 1 FROM schema_migrations WHERE version = ?")
+      .get(5);
+    if (siteReviewsApplied === undefined) {
+      database.exec(SITE_REVIEW_SCHEMA);
+      database
+        .prepare(
+          "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+        )
+        .run(5, new Date().toISOString());
     }
   })();
 }

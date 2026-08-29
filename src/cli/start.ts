@@ -1,3 +1,7 @@
+import { mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { config as loadEnvironment } from "dotenv";
 import { AgentRegistry } from "../agents/agent-registry.js";
 import { ClaudeAdapter } from "../agents/claude-adapter.js";
@@ -8,11 +12,16 @@ import { DebateService } from "../debate/debate-service.js";
 import { ActiveRuns } from "../orchestrator/active-runs.js";
 import { AskService } from "../orchestrator/ask-service.js";
 import { ProjectService } from "../projects/project-service.js";
+import { createReviewBrowserBinding } from "../site-review/browser/types.js";
+import { createSiteReviewRunner } from "../site-review/site-review-runner.js";
+import { SiteReviewService } from "../site-review/site-review-service.js";
+import { UrlPolicy } from "../site-review/url-policy.js";
 import { openDatabase } from "../storage/database.js";
 import { DeliberationRepository } from "../storage/deliberation-repository.js";
 import { migrateDatabase } from "../storage/migrations.js";
 import { ProjectRepository } from "../storage/project-repository.js";
 import { SessionRepository } from "../storage/session-repository.js";
+import { SiteReviewRepository } from "../storage/site-review-repository.js";
 import { DiscordRuntime } from "../transport/discord/discord-runtime.js";
 import { resolveAgentCommand } from "./resolve-agent-command.js";
 
@@ -49,6 +58,8 @@ export function createShutdownHandler(dependencies: ShutdownDependencies) {
 export async function startApplication(): Promise<void> {
   loadEnvironment();
   const paths = getAppPaths();
+  await mkdir(paths.dataDir, { recursive: true });
+  await mkdir(paths.logDir, { recursive: true });
   const config = await loadConfig(paths.configFile);
   const resolved = await Promise.all(
     (["codex", "claude"] as const).map(async (provider) => {
@@ -72,10 +83,15 @@ export async function startApplication(): Promise<void> {
   for (const project of projects.list()) projectRepository.upsert(project);
   const sessions = new SessionRepository(database);
   const activeRuns = new ActiveRuns();
-  const registry = new AgentRegistry([
-    new CodexAdapter({ ...config.agents.codex, command: commands.codex }),
-    new ClaudeAdapter({ ...config.agents.claude, command: commands.claude }),
-  ]);
+  const codex = new CodexAdapter({
+    ...config.agents.codex,
+    command: commands.codex,
+  });
+  const claude = new ClaudeAdapter({
+    ...config.agents.claude,
+    command: commands.claude,
+  });
+  const registry = new AgentRegistry([codex, claude]);
   const askService = new AskService({
     config,
     registry,
@@ -92,12 +108,42 @@ export async function startApplication(): Promise<void> {
     deliberation: new DeliberationRepository(database),
     activeRuns,
   });
+  const gatewaySource = fileURLToPath(
+    new URL("../site-review/browser/gateway-server.ts", import.meta.url),
+  );
+  const tsxLoader = createRequire(import.meta.url).resolve("tsx/esm");
+  const siteReviews = new SiteReviewRepository(database);
+  const siteReviewService = new SiteReviewService({
+    reviews: siteReviews,
+    policy: new UrlPolicy(),
+    activeRuns,
+    runAgent: createSiteReviewRunner({
+      codex,
+      claude,
+      workingDirectory: paths.dataDir,
+      createBrowserBinding: ({ reviewId, agentId, url }) =>
+        createReviewBrowserBinding({
+          configHome: paths.dataDir,
+          mcpConfigPath: join(paths.dataDir, `${reviewId}-${agentId}.mcp.json`),
+          gatewayCommand: process.execPath,
+          gatewayArgs: [
+            "--import",
+            tsxLoader,
+            gatewaySource,
+            `--url=${url}`,
+            `--log-file=${join(paths.logDir, `site-review-${reviewId}-${agentId}.log`)}`,
+          ],
+        }),
+    }),
+  });
   const runtime = new DiscordRuntime({
     config,
     projects,
     projectRepository,
     askService,
     debateService,
+    siteReviewService,
+    siteReviews,
     activeRuns,
     sessions,
   });

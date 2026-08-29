@@ -87,6 +87,19 @@ describe("Discord command handler", () => {
       ),
     ).toMatchObject({ choices: [{ name: "sol", value: "sol" }] });
     expect(JSON.stringify(ask)).not.toContain("gpt-sol");
+    const reviewSite = commands.find(
+      (command) => command.name === "review-site",
+    );
+    expect(
+      reviewSite?.options?.find(
+        (option: { name: string }) => option.name === "url",
+      ),
+    ).toMatchObject({ required: true });
+    expect(
+      reviewSite?.options?.find(
+        (option: { name: string }) => option.name === "focus",
+      ),
+    ).toMatchObject({ required: false });
   });
 
   test("asks a selected agent after immediate defer and passes concrete classes", async () => {
@@ -125,6 +138,39 @@ describe("Discord command handler", () => {
         codexModel: "sol",
       }),
     );
+    expect(port.edits).toHaveLength(1);
+  });
+
+  test("dispatches a public website review without requiring an active project", async () => {
+    const review = vi.fn().mockResolvedValue({
+      reviewId: "review-1",
+      status: "completed",
+      results: {
+        codex: { summary: "Codex summary" },
+        claude: { summary: "Claude summary" },
+      },
+    });
+    const handler = createCommandHandler({
+      config,
+      projects: { list: () => [], get: vi.fn() },
+      projectRepository: { getActive: () => undefined, setActive: vi.fn() },
+      askService: { ask: vi.fn() },
+      debateService: { debate: vi.fn() },
+      siteReviewService: { review },
+      activeRuns: new ActiveRuns(),
+      sessions: { agentRuns: () => [] },
+    });
+    const port = interaction("review-site", {
+      url: "https://example.com/",
+      focus: "signup",
+    });
+
+    await handler(port);
+
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://example.com/", focus: "signup" }),
+    );
+    expect(port.deferred).toBe(1);
     expect(port.edits).toHaveLength(1);
   });
 
@@ -220,6 +266,16 @@ describe("Discord command handler", () => {
       askService: { ask: vi.fn() },
       debateService: { debate: vi.fn() },
       activeRuns,
+      siteReviews: {
+        recentForScope: () =>
+          [
+            {
+              id: "review-1",
+              initialUrl: "https://example.com/",
+              status: "partial",
+            },
+          ] as never,
+      },
       sessions: {
         get: (id: string) =>
           ({
@@ -268,6 +324,8 @@ describe("Discord command handler", () => {
     expect(JSON.stringify(status.replies)).not.toContain("other-run");
     expect(JSON.stringify(status.replies)).toContain("## Codex");
     expect(JSON.stringify(status.replies)).toContain("Requested class: sol");
+    expect(JSON.stringify(status.replies)).toContain("review-1");
+    expect(JSON.stringify(status.replies)).toContain("https://example.com/");
     expect(owner.signal.aborted).toBe(true);
     expect(other.signal.aborted).toBe(false);
   });

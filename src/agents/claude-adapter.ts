@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentConfig } from "../config/schema.js";
 import {
   assertGitIntegrityUnchanged,
@@ -12,6 +15,9 @@ import {
 } from "./agent-registry.js";
 import { requireHelpFlags } from "./help-capabilities.js";
 import { buildSafeEnvironment } from "./safe-environment.js";
+import type { ReviewBrowserBinding } from "../site-review/browser/types.js";
+import { renderClaudeReviewMcpConfig } from "../site-review/browser/provider-binding.js";
+import type { SiteReviewAgentResponse } from "../site-review/structured-response.js";
 import {
   type AgentAdapter,
   type AgentCapabilities,
@@ -52,6 +58,55 @@ export function buildClaudeArguments(options: ClaudeArgumentOptions): string[] {
     if (options.modelSelection.requestedEffort !== undefined) {
       args.push("--effort", options.modelSelection.requestedEffort);
     }
+  }
+  return args;
+}
+
+export interface ClaudeReviewArgumentOptions {
+  schema: string;
+  mcpConfig: string;
+  allowedMcpTools: string;
+  modelSelection?: ResolvedModelSelection | undefined;
+}
+
+export interface ClaudeReviewRequest {
+  workingDirectory: string;
+  prompt: string;
+  responseSchema: z.ZodType<SiteReviewAgentResponse>;
+  browser: Pick<ReviewBrowserBinding, "gateway" | "toolNames">;
+}
+
+export interface ClaudeReviewResult {
+  status: AgentResult["status"];
+  response?: SiteReviewAgentResponse;
+  diagnostics: readonly string[];
+}
+
+export function buildClaudeReviewArguments(
+  options: ClaudeReviewArgumentOptions,
+): string[] {
+  const args = [
+    "--bare",
+    "--strict-mcp-config",
+    "--mcp-config",
+    options.mcpConfig,
+    "--tools",
+    "",
+    "--allowedTools",
+    options.allowedMcpTools,
+    "--permission-mode",
+    "plan",
+    "--no-session-persistence",
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    options.schema,
+  ];
+  if (options.modelSelection !== undefined) {
+    args.push("--model", options.modelSelection.cliModelId);
+    if (options.modelSelection.requestedEffort !== undefined)
+      args.push("--effort", options.modelSelection.requestedEffort);
   }
   return args;
 }
@@ -331,6 +386,62 @@ export class ClaudeAdapter implements AgentAdapter {
       return this.failed(request, 0, [
         error instanceof Error ? error.message : "Claude adapter failed",
       ]);
+    }
+  }
+  async runReview(
+    request: ClaudeReviewRequest,
+    signal: AbortSignal,
+  ): Promise<ClaudeReviewResult> {
+    const capabilities = await this.probe();
+    if (!capabilities.available)
+      return { status: "failed", diagnostics: capabilities.diagnostics };
+    const directory = await mkdtemp(
+      join(tmpdir(), "ai-workspace-claude-review-"),
+    );
+    try {
+      const binding = renderClaudeReviewMcpConfig(request.browser);
+      const result = await this.process({
+        command: this.config.command,
+        args: buildClaudeReviewArguments({
+          schema: JSON.stringify(
+            z.toJSONSchema(request.responseSchema, { target: "draft-07" }),
+          ),
+          mcpConfig: binding.config,
+          allowedMcpTools: binding.allowedTools,
+        }),
+        cwd: request.workingDirectory,
+        stdin: request.prompt,
+        env: {
+          ...buildSafeEnvironment(process.env, ["ANTHROPIC_API_KEY"]),
+          CLAUDE_CONFIG_DIR: directory,
+        },
+        timeoutMs: this.config.timeoutMs,
+        maxOutputBytes: this.config.maxOutputBytes,
+        signal,
+      });
+      const diagnostics = [result.stdout, result.stderr].filter(
+        (value) => value !== "",
+      );
+      if (statusOf(result) !== "completed")
+        return { status: statusOf(result), diagnostics };
+      return {
+        status: "completed",
+        response: request.responseSchema.parse(
+          JSON.parse(parseClaudeResult(result.stdout)),
+        ),
+        diagnostics,
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        diagnostics: [
+          error instanceof Error
+            ? error.message
+            : "Claude review adapter failed",
+        ],
+      };
+    } finally {
+      await rm(directory, { recursive: true, force: true, maxRetries: 0 });
     }
   }
   private execution(

@@ -4,8 +4,10 @@ import { describe, expect, test } from "vitest";
 import {
   CodexAdapter,
   buildCodexArguments,
+  buildCodexReviewArguments,
   parseCodexJsonl,
 } from "../../../src/agents/codex-adapter.js";
+import { SiteReviewAgentResponseSchema } from "../../../src/site-review/structured-response.js";
 
 const fixture = fileURLToPath(
   new URL("../../fixtures/agent-output/codex-success.json", import.meta.url),
@@ -93,6 +95,79 @@ describe("Codex adapter arguments and JSONL parser", () => {
         modelSelection: selection,
       }),
     ).toEqual(expected);
+  });
+
+  test("builds a generated-home website review invocation", () => {
+    expect(
+      buildCodexReviewArguments({
+        workingDirectory: "C:/private/review-workspace",
+        schemaPath: "C:/private/schema.json",
+      }),
+    ).toEqual([
+      "exec",
+      "--ephemeral",
+      "--ignore-rules",
+      "--json",
+      "--sandbox",
+      "read-only",
+      "--config",
+      'windows.sandbox="elevated"',
+      "--config",
+      'approval_policy="never"',
+      "-C",
+      "C:/private/review-workspace",
+      "--skip-git-repo-check",
+      "--output-schema",
+      "C:/private/schema.json",
+      "-",
+    ]);
+  });
+
+  test("runs a website review with only its generated MCP configuration", async () => {
+    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+    const adapter = new CodexAdapter(
+      {
+        command: "codex",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: (request) => {
+          calls.push({ args: request.args, env: request.env });
+          const stdout =
+            calls.length === 1
+              ? "0.76.0"
+              : calls.length === 2
+                ? "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C"
+                : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}"}}\n{"type":"turn.completed"}';
+          return Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout,
+            stderr: "",
+            durationMs: 1,
+            termination: "exit" as const,
+          });
+        },
+      },
+    );
+    await expect(
+      adapter.runReview(
+        {
+          workingDirectory: process.cwd(),
+          prompt: "review",
+          responseSchema: SiteReviewAgentResponseSchema,
+          browser: {
+            gateway: { command: "node", args: ["gateway.js"] },
+            toolNames: ["list_pages"] as never,
+          },
+        },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(calls[2]?.args).toContain("--skip-git-repo-check");
+    expect(calls[2]?.env.CODEX_HOME).toBeDefined();
   });
 
   test("extracts the completed structured JSON response from JSONL", async () => {

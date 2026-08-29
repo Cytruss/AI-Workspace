@@ -4,8 +4,10 @@ import { DebateService } from "../../debate/debate-service.js";
 import type { DebateReport } from "../../debate/types.js";
 import { AskService } from "../../orchestrator/ask-service.js";
 import { ActiveRuns } from "../../orchestrator/active-runs.js";
+import type { SiteReviewService } from "../../site-review/site-review-service.js";
 import type { RegisteredProject } from "../../projects/project-service.js";
 import type { ProjectScope } from "../../storage/project-repository.js";
+import type { SiteReviewRecord } from "../../storage/site-review-repository.js";
 import type {
   AgentRunRecord,
   SessionRecord,
@@ -15,6 +17,7 @@ import {
   formatAskReport,
   formatDebateReportParts,
   formatModels,
+  formatSiteReviewReport,
   formatStatusOverview,
   type DiscordPayload,
 } from "./response-format.js";
@@ -76,6 +79,13 @@ export interface CommandHandlerDependencies {
     persistedReport?(interactionId: string): DebateReport | undefined;
   };
   activeRuns: ActiveRuns;
+  siteReviewService?: Pick<SiteReviewService, "review">;
+  siteReviews?: {
+    recentForScope(
+      scope: ProjectScope,
+      limit: number,
+    ): readonly SiteReviewRecord[];
+  };
   sessions?: {
     agentRuns(sessionId: string): readonly AgentRunRecord[];
     get?(sessionId: string): SessionRecord;
@@ -171,7 +181,9 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
       return;
     }
     const deferred =
-      port.commandName === "ask" || port.commandName === "debate";
+      port.commandName === "ask" ||
+      port.commandName === "debate" ||
+      port.commandName === "review-site";
     if (deferred) await port.deferReply();
     try {
       if (port.commandName === "projects") {
@@ -197,9 +209,26 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
         await port.reply(message(`Active project switched to ${project.id}.`));
         return;
       }
+      if (port.commandName === "review-site") {
+        if (dependencies.siteReviewService === undefined)
+          throw new DiscordCommandError(
+            "Website reviews are not available yet.",
+          );
+        const focus = port.getString("focus")?.trim();
+        const report = await dependencies.siteReviewService.review({
+          interactionId: port.interactionId,
+          scope: authorized,
+          url: required(port, "url"),
+          ...(focus === undefined || focus === "" ? {} : { focus }),
+        });
+        await port.editReply(formatSiteReviewReport(report));
+        return;
+      }
       if (port.commandName === "status") {
         const recent =
           dependencies.sessions?.recentForScope?.(authorized, 5) ?? [];
+        const recentReviews =
+          dependencies.siteReviews?.recentForScope(authorized, 5) ?? [];
         const active = dependencies.activeRuns
           .list()
           .filter((run) => run.ownerUserId === authorized.userId)
@@ -216,7 +245,11 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
               return [];
             }
           });
-        if (active.length === 0 && recent.length === 0) {
+        if (
+          active.length === 0 &&
+          recent.length === 0 &&
+          recentReviews.length === 0
+        ) {
           await port.reply(
             message("No persisted sessions are available for this channel."),
           );
@@ -238,6 +271,7 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
                 project: dependencies.projects.get(session.projectId),
                 runs: dependencies.sessions?.agentRuns(session.id) ?? [],
               })),
+            recentReviews,
           ),
         );
         return;

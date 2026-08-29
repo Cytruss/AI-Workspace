@@ -1,11 +1,13 @@
 import type { AgentResult } from "../../agents/types.js";
 import type { DebateReport } from "../../debate/types.js";
 import type { AskReport } from "../../orchestrator/types.js";
+import type { SiteReviewReport } from "../../site-review/site-review-service.js";
 import type {
   AgentRunRecord,
   SessionRecord,
 } from "../../storage/session-repository.js";
 import type { RegisteredProject } from "../../projects/project-service.js";
+import type { SiteReviewRecord } from "../../storage/site-review-repository.js";
 
 export interface DiscordAttachment {
   attachment: Buffer;
@@ -159,6 +161,38 @@ export function formatAskReport(report: AskReport): DiscordPayload {
   return payload(lines.join("\n"), `ask-${report.sessionId}.txt`);
 }
 
+export function formatSiteReviewReport(
+  report: SiteReviewReport,
+): DiscordPayload {
+  const details = (["codex", "claude"] as const).flatMap((agentId) => {
+    const response = report.results[agentId];
+    return response === undefined
+      ? [`## ${agentName(agentId)}`, "No completed result."]
+      : [
+          `## ${agentName(agentId)}`,
+          response.summary,
+          ...response.findings.map((finding) => `- ${finding.statement}`),
+          ...response.uncertainties.map(
+            (item) => `- Uncertain: ${item.statement}`,
+          ),
+        ];
+  });
+  return payload(
+    [
+      `Website review: ${report.reviewId}`,
+      `Status: ${report.status}`,
+      ...(report.comparison === undefined
+        ? []
+        : [
+            `Agreement: ${String(report.comparison.agreed.length)}; disagreements: ${String(report.comparison.different.length)}.`,
+          ]),
+      "",
+      ...details,
+    ].join("\n"),
+    `site-review-${report.reviewId}.txt`,
+  );
+}
+
 export function formatStatusReport(
   session: SessionRecord,
   project: RegisteredProject,
@@ -207,6 +241,7 @@ export interface StatusReportEntry {
 export function formatStatusOverview(
   active: readonly StatusReportEntry[],
   recent: readonly StatusReportEntry[],
+  reviews: readonly SiteReviewRecord[] = [],
 ): DiscordPayload {
   const section = (label: string, entries: readonly StatusReportEntry[]) => [
     `# ${label}`,
@@ -222,6 +257,15 @@ export function formatStatusOverview(
       ...section("Active sessions", active),
       "",
       ...section("Recent sessions", recent),
+      "",
+      "# Recent website reviews",
+      ...(reviews.length === 0
+        ? ["None"]
+        : reviews.flatMap((review) => [
+            `Review: ${review.id}`,
+            `Target: ${review.initialUrl}`,
+            `Status: ${review.status}`,
+          ])),
     ].join("\n"),
     "status.txt",
   );

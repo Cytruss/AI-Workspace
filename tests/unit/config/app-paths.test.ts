@@ -8,6 +8,7 @@ describe("getAppPaths", () => {
       configFile: "/data/ai-workspace/config.json",
       databaseFile: "/data/ai-workspace/ai-workspace.sqlite",
       logDir: "/data/ai-workspace/logs",
+      artifactDir: "/data/ai-workspace/artifacts",
     });
   });
 

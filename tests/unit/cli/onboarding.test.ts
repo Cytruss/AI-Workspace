@@ -14,6 +14,7 @@ const paths: AppPaths = {
   databaseFile:
     "C:/Users/test/AppData/Roaming/ai-workspace/ai-workspace.sqlite",
   logDir: "C:/Users/test/AppData/Roaming/ai-workspace/logs",
+  artifactDir: "C:/Users/test/AppData/Roaming/ai-workspace/artifacts",
 };
 
 const token = "never-render-this-token";
