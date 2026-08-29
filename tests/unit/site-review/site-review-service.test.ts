@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, test } from "vitest";
 import { SiteReviewService } from "../../../src/site-review/site-review-service.js";
 import { UrlPolicy } from "../../../src/site-review/url-policy.js";

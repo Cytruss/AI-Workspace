@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, test, vi } from "vitest";
 import {
   BrowserSessionFactory,

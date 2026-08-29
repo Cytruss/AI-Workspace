@@ -3,7 +3,7 @@ import { verifyReviewBrowserTools } from "../../../../src/site-review/browser/pr
 
 describe("review browser provider capability", () => {
   test("accepts exactly the review gateway tool set", () => {
-    expect(() =>
+    expect(() => {
       verifyReviewBrowserTools([
         "read_network_summary",
         "capture_screenshot",
@@ -14,12 +14,12 @@ describe("review browser provider capability", () => {
         "open_page",
         "list_pages",
         "read_console_summary",
-      ]),
-    ).not.toThrow();
+      ]);
+    }).not.toThrow();
   });
 
   test("fails closed when the provider exposes an unexpected tool", () => {
-    expect(() =>
+    expect(() => {
       verifyReviewBrowserTools([
         "list_pages",
         "open_page",
@@ -31,13 +31,13 @@ describe("review browser provider capability", () => {
         "read_console_summary",
         "read_network_summary",
         "evaluate_script",
-      ]),
-    ).toThrow("unexpected tool");
+      ]);
+    }).toThrow("unexpected tool");
   });
 
   test("fails closed when a required tool is missing", () => {
-    expect(() => verifyReviewBrowserTools(["list_pages"])).toThrow(
-      "missing required tool",
-    );
+    expect(() => {
+      verifyReviewBrowserTools(["list_pages"]);
+    }).toThrow("missing required tool");
   });
 });

@@ -5,7 +5,7 @@ import type { SiteReviewAgentResponse } from "../../../src/site-review/structure
 function review(
   agentId: "codex" | "claude",
   finding: string,
-  uncertainty: string | undefined = undefined,
+  uncertainty?: string,
 ): Readonly<{
   agentId: "codex" | "claude";
   response: SiteReviewAgentResponse;

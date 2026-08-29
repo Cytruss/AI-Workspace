@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, test, vi } from "vitest";
 import {
   ReviewNavigationGateway,
@@ -10,8 +11,12 @@ describe("ReviewBrowserToolPolicy", () => {
   test("permits only named read-only review tools", () => {
     const policy = new ReviewBrowserToolPolicy();
 
-    expect(() => policy.assertAllowed("inspect_accessibility")).not.toThrow();
-    expect(() => policy.assertAllowed("capture_screenshot")).not.toThrow();
+    expect(() => {
+      policy.assertAllowed("inspect_accessibility");
+    }).not.toThrow();
+    expect(() => {
+      policy.assertAllowed("capture_screenshot");
+    }).not.toThrow();
   });
 
   test.each([
@@ -24,9 +29,9 @@ describe("ReviewBrowserToolPolicy", () => {
   ])("rejects forbidden browser tool: %s", (tool) => {
     const policy = new ReviewBrowserToolPolicy();
 
-    expect(() => policy.assertAllowed(tool)).toThrow(
-      ReviewBrowserToolPolicyError,
-    );
+    expect(() => {
+      policy.assertAllowed(tool);
+    }).toThrow(ReviewBrowserToolPolicyError);
   });
 });
 

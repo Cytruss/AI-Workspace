@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, test } from "vitest";
 import {
   SiteReviewError,
@@ -133,6 +134,8 @@ describe("UrlPolicy", () => {
       initial,
       "https://example.com/page-10",
     );
-    expect(() => ledger.recordSuccess(next)).toThrow("page limit reached");
+    expect(() => {
+      ledger.recordSuccess(next);
+    }).toThrow("page limit reached");
   });
 });

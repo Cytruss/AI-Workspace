@@ -22,9 +22,9 @@ describe("SiteReviewRepository", () => {
     repository.markRunning(created.id);
     repository.markCompleted(created.id);
     expect(repository.get(created.id)).toMatchObject({ status: "completed" });
-    expect(() => repository.markRunning(created.id)).toThrow(
-      "Invalid site review transition",
-    );
+    expect(() => {
+      repository.markRunning(created.id);
+    }).toThrow("Invalid site review transition");
     database.close();
   });
 
