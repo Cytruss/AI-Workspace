@@ -198,17 +198,21 @@ export class VisitLedger {
 
   constructor(private readonly initial: ValidatedReviewUrl) {}
 
-  recordSuccess(page: ValidatedReviewUrl): void {
+  ensureCapacity(page: ValidatedReviewUrl): void {
     if (page.origin !== this.initial.origin) {
       throw new SiteReviewError(
         "SITE_REDIRECT_BLOCKED",
         "Cross-origin page cannot be recorded",
       );
     }
-    if (this.visited.has(page.canonicalUrl)) return;
-    if (this.visited.size >= 10) {
+    if (!this.visited.has(page.canonicalUrl) && this.visited.size >= 10) {
       throw new SiteReviewError("SITE_PAGE_LIMIT", "Review page limit reached");
     }
+  }
+
+  recordSuccess(page: ValidatedReviewUrl): void {
+    this.ensureCapacity(page);
+    if (this.visited.has(page.canonicalUrl)) return;
     this.visited.add(page.canonicalUrl);
   }
 }

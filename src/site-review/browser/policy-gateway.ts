@@ -74,6 +74,7 @@ export class ReviewNavigationGateway {
       this.dependencies.initial,
       input,
     );
+    this.ledger.ensureCapacity(target);
     const result = await navigate(target.canonicalUrl);
     const finalUrl =
       this.dependencies.currentUrl === undefined

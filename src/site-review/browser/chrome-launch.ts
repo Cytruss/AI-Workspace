@@ -9,6 +9,7 @@ export class ChromeLaunchPolicyError extends Error {
 
 export interface ChromeDevtoolsLaunchOptions {
   logFile: string;
+  allowedUrlPattern: string;
   extraArguments?: readonly string[] | undefined;
 }
 
@@ -18,6 +19,8 @@ export function buildChromeDevtoolsArguments(
   if (options.logFile.length === 0) {
     throw new ChromeLaunchPolicyError("Chrome log file is required");
   }
+  if (options.allowedUrlPattern.length === 0)
+    throw new ChromeLaunchPolicyError("An allowed URL pattern is required");
   if ((options.extraArguments?.length ?? 0) > 0) {
     throw new ChromeLaunchPolicyError(
       "Chrome launch does not allow extra arguments",
@@ -28,5 +31,7 @@ export function buildChromeDevtoolsArguments(
     "--isolated",
     "--logFile",
     options.logFile,
+    "--allowedUrlPattern",
+    options.allowedUrlPattern,
   ]);
 }

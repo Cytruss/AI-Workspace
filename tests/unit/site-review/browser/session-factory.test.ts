@@ -31,6 +31,7 @@ describe("BrowserSessionFactory", () => {
 
     const session = await factory.create({
       logFile: "C:/private/review-1/codex/devtools.log",
+      allowedUrlPattern: "https://example.com/*",
     });
 
     expect(connect).toHaveBeenCalledWith({
@@ -41,6 +42,8 @@ describe("BrowserSessionFactory", () => {
         "--isolated",
         "--logFile",
         "C:/private/review-1/codex/devtools.log",
+        "--allowedUrlPattern",
+        "https://example.com/*",
       ],
     });
     await session.client.call("inspect_rendered_page", { verbose: false });
@@ -64,7 +67,10 @@ describe("BrowserSessionFactory", () => {
     });
 
     await expect(
-      factory.create({ logFile: "C:/private/review-1/codex/devtools.log" }),
+      factory.create({
+        logFile: "C:/private/review-1/codex/devtools.log",
+        allowedUrlPattern: "https://example.com/*",
+      }),
     ).rejects.toThrow(BrowserSessionFactoryError);
     expect(close).toHaveBeenCalledOnce();
   });

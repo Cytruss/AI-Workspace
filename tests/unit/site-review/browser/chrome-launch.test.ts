@@ -9,12 +9,15 @@ describe("buildChromeDevtoolsArguments", () => {
     expect(
       buildChromeDevtoolsArguments({
         logFile: "C:/private/review-1/codex/devtools.log",
+        allowedUrlPattern: "https://example.com/*",
       }),
     ).toEqual([
       "--headless",
       "--isolated",
       "--logFile",
       "C:/private/review-1/codex/devtools.log",
+      "--allowedUrlPattern",
+      "https://example.com/*",
     ]);
   });
 
@@ -22,6 +25,7 @@ describe("buildChromeDevtoolsArguments", () => {
     expect(() =>
       buildChromeDevtoolsArguments({
         logFile: "C:/private/review-1/codex/devtools.log",
+        allowedUrlPattern: "https://example.com/*",
         extraArguments: ["--autoConnect", "--userDataDir=C:/Users/operator"],
       }),
     ).toThrow(ChromeLaunchPolicyError);

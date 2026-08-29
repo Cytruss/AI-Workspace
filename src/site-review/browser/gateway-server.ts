@@ -23,12 +23,20 @@ async function main(): Promise<void> {
   const session = await new BrowserSessionFactory({
     modulePath,
     connect: createChromeDevtoolsMcpConnection,
-  }).create({ logFile: required("log-file") });
+  }).create({
+    logFile: required("log-file"),
+    allowedUrlPattern: `${initial.origin}/*`,
+  });
   const gateway = new ReviewBrowserGateway({
     client: session.client,
     urlPolicy: new UrlPolicy(),
     initial,
   });
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closing ??= session.close().catch(() => undefined);
+    return closing;
+  };
   const server = new McpServer({ name: "review-browser", version: "1.0.0" });
   for (const name of [
     "list_pages",
@@ -55,8 +63,10 @@ async function main(): Promise<void> {
       ({ url }) => gateway.call(name, { url }) as never,
     );
   }
-  process.once("SIGTERM", () => void session.close());
-  process.once("SIGINT", () => void session.close());
+  process.stdin.once("end", () => void close());
+  process.stdin.once("close", () => void close());
+  process.once("SIGTERM", () => void close().then(() => process.exit(0)));
+  process.once("SIGINT", () => void close().then(() => process.exit(0)));
   await server.connect(new StdioServerTransport());
 }
 

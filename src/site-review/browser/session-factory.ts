@@ -42,7 +42,7 @@ export class BrowserSessionFactory {
     private readonly dependencies: BrowserSessionFactoryDependencies,
   ) {}
 
-  async create(input: { logFile: string }): Promise<{
+  async create(input: { logFile: string; allowedUrlPattern: string }): Promise<{
     client: ChromeDevtoolsClient;
     close(): Promise<void>;
   }> {
@@ -50,7 +50,7 @@ export class BrowserSessionFactory {
       command: process.execPath,
       args: [
         this.dependencies.modulePath,
-        ...buildChromeDevtoolsArguments({ logFile: input.logFile }),
+        ...buildChromeDevtoolsArguments(input),
       ],
     });
     try {
