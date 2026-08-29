@@ -97,4 +97,31 @@ describe("SiteReviewService", () => {
     expect(calls).toBe(2);
     database.close();
   });
+
+  test("persists a failed terminal review for interaction replay", async () => {
+    const database = openDatabase(":memory:");
+    migrateDatabase(database);
+    const reviews = new SiteReviewRepository(database);
+    const service = new SiteReviewService({
+      reviews,
+      policy: new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] }),
+      activeRuns: new ActiveRuns(),
+      runAgent: async () => {
+        throw new Error("provider unavailable");
+      },
+    });
+
+    await expect(
+      service.review({
+        interactionId: "i4",
+        scope: { guildId: "g", channelId: "c", userId: "u" },
+        url: "https://example.com/",
+      }),
+    ).resolves.toMatchObject({ status: "failed" });
+    const review = reviews.findByInteractionId("i4");
+    expect(reviews.report(review?.id ?? "missing")).toMatchObject({
+      status: "failed",
+    });
+    database.close();
+  });
 });

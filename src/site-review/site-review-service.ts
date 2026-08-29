@@ -139,11 +139,13 @@ export class SiteReviewService {
         return report;
       }
       this.dependencies.reviews.markFailed(review.id);
-      return {
+      const report: SiteReviewReport = {
         reviewId: review.id,
         status: "failed",
         results: { codex, claude },
       };
+      this.dependencies.reviews.persistReport(review.id, report);
+      return report;
     } finally {
       this.dependencies.activeRuns.unregister(review.id);
     }
