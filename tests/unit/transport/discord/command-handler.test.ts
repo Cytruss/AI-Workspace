@@ -266,6 +266,16 @@ describe("Discord command handler", () => {
       askService: { ask: vi.fn() },
       debateService: { debate: vi.fn() },
       activeRuns,
+      siteReviews: {
+        recentForScope: () =>
+          [
+            {
+              id: "review-1",
+              initialUrl: "https://example.com/",
+              status: "partial",
+            },
+          ] as never,
+      },
       sessions: {
         get: (id: string) =>
           ({
@@ -314,6 +324,8 @@ describe("Discord command handler", () => {
     expect(JSON.stringify(status.replies)).not.toContain("other-run");
     expect(JSON.stringify(status.replies)).toContain("## Codex");
     expect(JSON.stringify(status.replies)).toContain("Requested class: sol");
+    expect(JSON.stringify(status.replies)).toContain("review-1");
+    expect(JSON.stringify(status.replies)).toContain("https://example.com/");
     expect(owner.signal.aborted).toBe(true);
     expect(other.signal.aborted).toBe(false);
   });

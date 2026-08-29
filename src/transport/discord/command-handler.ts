@@ -7,6 +7,7 @@ import { ActiveRuns } from "../../orchestrator/active-runs.js";
 import type { SiteReviewService } from "../../site-review/site-review-service.js";
 import type { RegisteredProject } from "../../projects/project-service.js";
 import type { ProjectScope } from "../../storage/project-repository.js";
+import type { SiteReviewRecord } from "../../storage/site-review-repository.js";
 import type {
   AgentRunRecord,
   SessionRecord,
@@ -79,6 +80,12 @@ export interface CommandHandlerDependencies {
   };
   activeRuns: ActiveRuns;
   siteReviewService?: Pick<SiteReviewService, "review">;
+  siteReviews?: {
+    recentForScope(
+      scope: ProjectScope,
+      limit: number,
+    ): readonly SiteReviewRecord[];
+  };
   sessions?: {
     agentRuns(sessionId: string): readonly AgentRunRecord[];
     get?(sessionId: string): SessionRecord;
@@ -220,6 +227,8 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
       if (port.commandName === "status") {
         const recent =
           dependencies.sessions?.recentForScope?.(authorized, 5) ?? [];
+        const recentReviews =
+          dependencies.siteReviews?.recentForScope(authorized, 5) ?? [];
         const active = dependencies.activeRuns
           .list()
           .filter((run) => run.ownerUserId === authorized.userId)
@@ -236,7 +245,11 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
               return [];
             }
           });
-        if (active.length === 0 && recent.length === 0) {
+        if (
+          active.length === 0 &&
+          recent.length === 0 &&
+          recentReviews.length === 0
+        ) {
           await port.reply(
             message("No persisted sessions are available for this channel."),
           );
@@ -258,6 +271,7 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
                 project: dependencies.projects.get(session.projectId),
                 runs: dependencies.sessions?.agentRuns(session.id) ?? [],
               })),
+            recentReviews,
           ),
         );
         return;

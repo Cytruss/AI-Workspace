@@ -26,6 +26,7 @@ export interface SiteReviewServiceDependencies {
   policy: UrlPolicy;
   activeRuns: ActiveRuns;
   runAgent(input: {
+    reviewId: string;
     agentId: "codex" | "claude";
     url: string;
     focus?: string;
@@ -69,6 +70,7 @@ export class SiteReviewService {
       const settled = await Promise.allSettled(
         (["codex", "claude"] as const).map((agentId) =>
           this.dependencies.runAgent({
+            reviewId: review.id,
             agentId,
             url: target.canonicalUrl,
             ...(input.focus === undefined ? {} : { focus: input.focus }),
@@ -78,11 +80,13 @@ export class SiteReviewService {
       );
       if (controller.signal.aborted) {
         this.dependencies.reviews.markCancelled(review.id);
-        return {
+        const report: SiteReviewReport = {
           reviewId: review.id,
           status: "cancelled",
           results: { codex: undefined, claude: undefined },
         };
+        this.dependencies.reviews.persistReport(review.id, report);
+        return report;
       }
       const codex =
         settled[0]?.status === "fulfilled" ? settled[0].value : undefined;

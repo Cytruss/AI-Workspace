@@ -47,8 +47,9 @@ describe("SiteReviewService", () => {
     const database = openDatabase(":memory:");
     migrateDatabase(database);
     const activeRuns = new ActiveRuns();
+    const reviews = new SiteReviewRepository(database);
     const service = new SiteReviewService({
-      reviews: new SiteReviewRepository(database),
+      reviews,
       policy: new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] }),
       activeRuns,
       runAgent: async ({ signal }) => {
@@ -64,6 +65,10 @@ describe("SiteReviewService", () => {
         url: "https://example.com/",
       }),
     ).resolves.toMatchObject({ status: "cancelled" });
+    const review = reviews.findByInteractionId("i2");
+    expect(reviews.report(review?.id ?? "missing")).toMatchObject({
+      status: "cancelled",
+    });
     database.close();
   });
 

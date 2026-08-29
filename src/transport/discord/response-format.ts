@@ -7,6 +7,7 @@ import type {
   SessionRecord,
 } from "../../storage/session-repository.js";
 import type { RegisteredProject } from "../../projects/project-service.js";
+import type { SiteReviewRecord } from "../../storage/site-review-repository.js";
 
 export interface DiscordAttachment {
   attachment: Buffer;
@@ -240,6 +241,7 @@ export interface StatusReportEntry {
 export function formatStatusOverview(
   active: readonly StatusReportEntry[],
   recent: readonly StatusReportEntry[],
+  reviews: readonly SiteReviewRecord[] = [],
 ): DiscordPayload {
   const section = (label: string, entries: readonly StatusReportEntry[]) => [
     `# ${label}`,
@@ -255,6 +257,15 @@ export function formatStatusOverview(
       ...section("Active sessions", active),
       "",
       ...section("Recent sessions", recent),
+      "",
+      "# Recent website reviews",
+      ...(reviews.length === 0
+        ? ["None"]
+        : reviews.flatMap((review) => [
+            `Review: ${review.id}`,
+            `Target: ${review.initialUrl}`,
+            `Status: ${review.status}`,
+          ])),
     ].join("\n"),
     "status.txt",
   );
