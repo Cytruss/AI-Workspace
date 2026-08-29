@@ -8,6 +8,7 @@ import {
   buildClaudeReviewArguments,
   parseClaudeResult,
 } from "../../../src/agents/claude-adapter.js";
+import { SiteReviewAgentResponseSchema } from "../../../src/site-review/structured-response.js";
 
 const fixture = fileURLToPath(
   new URL("../../fixtures/agent-output/claude-success.json", import.meta.url),
@@ -76,6 +77,53 @@ describe("Claude adapter arguments and JSON parser", () => {
       "--json-schema",
       schema,
     ]);
+  });
+
+  test("runs a website review with a strict generated MCP configuration", async () => {
+    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+    const adapter = new ClaudeAdapter(
+      {
+        command: "claude",
+        models: { selections: [] },
+        timeoutMs: 1_000,
+        maxOutputBytes: 1_024,
+      },
+      {
+        runProcess: (request) => {
+          calls.push({ args: request.args, env: request.env });
+          const stdout =
+            calls.length === 1
+              ? "2.1.233"
+              : calls.length === 2
+                ? "--safe-mode --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort"
+                : '{"result":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}","modelUsage":{}}';
+          return Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdout,
+            stderr: "",
+            durationMs: 1,
+            termination: "exit" as const,
+          });
+        },
+      },
+    );
+    await expect(
+      adapter.runReview(
+        {
+          workingDirectory: process.cwd(),
+          prompt: "review",
+          responseSchema: SiteReviewAgentResponseSchema,
+          browser: {
+            gateway: { command: "node", args: ["gateway.js"] },
+            toolNames: ["list_pages"] as never,
+          },
+        },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(calls[2]?.args).toContain("--strict-mcp-config");
+    expect(calls[2]?.env.CLAUDE_CONFIG_DIR).toBeDefined();
   });
 
   test("extracts the successful result", async () => {
