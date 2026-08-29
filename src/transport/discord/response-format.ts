@@ -1,6 +1,7 @@
 import type { AgentResult } from "../../agents/types.js";
 import type { DebateReport } from "../../debate/types.js";
 import type { AskReport } from "../../orchestrator/types.js";
+import type { SiteReviewReport } from "../../site-review/site-review-service.js";
 import type {
   AgentRunRecord,
   SessionRecord,
@@ -157,6 +158,38 @@ export function formatAskReport(report: AskReport): DiscordPayload {
       lines.push("", formatReadOnlyListing(unwrapAskContent(result.response)));
   }
   return payload(lines.join("\n"), `ask-${report.sessionId}.txt`);
+}
+
+export function formatSiteReviewReport(
+  report: SiteReviewReport,
+): DiscordPayload {
+  const details = (["codex", "claude"] as const).flatMap((agentId) => {
+    const response = report.results[agentId];
+    return response === undefined
+      ? [`## ${agentName(agentId)}`, "No completed result."]
+      : [
+          `## ${agentName(agentId)}`,
+          response.summary,
+          ...response.findings.map((finding) => `- ${finding.statement}`),
+          ...response.uncertainties.map(
+            (item) => `- Uncertain: ${item.statement}`,
+          ),
+        ];
+  });
+  return payload(
+    [
+      `Website review: ${report.reviewId}`,
+      `Status: ${report.status}`,
+      ...(report.comparison === undefined
+        ? []
+        : [
+            `Agreement: ${String(report.comparison.agreed.length)}; disagreements: ${String(report.comparison.different.length)}.`,
+          ]),
+      "",
+      ...details,
+    ].join("\n"),
+    `site-review-${report.reviewId}.txt`,
+  );
 }
 
 export function formatStatusReport(

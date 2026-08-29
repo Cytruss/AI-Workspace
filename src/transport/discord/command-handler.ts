@@ -16,6 +16,7 @@ import {
   formatAskReport,
   formatDebateReportParts,
   formatModels,
+  formatSiteReviewReport,
   formatStatusOverview,
   type DiscordPayload,
 } from "./response-format.js";
@@ -213,11 +214,7 @@ export function createCommandHandler(dependencies: CommandHandlerDependencies) {
           url: required(port, "url"),
           ...(focus === undefined || focus === "" ? {} : { focus }),
         });
-        await port.editReply(
-          message(
-            `Website review ${report.status}. Codex: ${report.results.codex?.summary ?? "unavailable"}; Claude: ${report.results.claude?.summary ?? "unavailable"}`,
-          ),
-        );
+        await port.editReply(formatSiteReviewReport(report));
         return;
       }
       if (port.commandName === "status") {
