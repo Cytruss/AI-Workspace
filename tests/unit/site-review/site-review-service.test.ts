@@ -20,8 +20,9 @@ describe("SiteReviewService", () => {
   test("runs both agents without an active project and compares results", async () => {
     const database = openDatabase(":memory:");
     migrateDatabase(database);
+    const reviews = new SiteReviewRepository(database);
     const service = new SiteReviewService({
-      reviews: new SiteReviewRepository(database),
+      reviews,
       policy: new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] }),
       activeRuns: new ActiveRuns(),
       runAgent: async ({ agentId }) => response(agentId),
@@ -33,6 +34,12 @@ describe("SiteReviewService", () => {
         url: "https://example.com/",
       }),
     ).resolves.toMatchObject({ status: "completed" });
+    const review = reviews.findByInteractionId("i1");
+    expect(review).toBeDefined();
+    expect(reviews.agentResponses(review?.id ?? "missing")).toHaveLength(2);
+    expect(reviews.report(review?.id ?? "missing")).toMatchObject({
+      status: "completed",
+    });
     database.close();
   });
 
@@ -57,6 +64,32 @@ describe("SiteReviewService", () => {
         url: "https://example.com/",
       }),
     ).resolves.toMatchObject({ status: "cancelled" });
+    database.close();
+  });
+
+  test("replays a persisted terminal review without invoking agents again", async () => {
+    const database = openDatabase(":memory:");
+    migrateDatabase(database);
+    let calls = 0;
+    const service = new SiteReviewService({
+      reviews: new SiteReviewRepository(database),
+      policy: new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] }),
+      activeRuns: new ActiveRuns(),
+      runAgent: async ({ agentId }) => {
+        calls += 1;
+        return response(agentId);
+      },
+    });
+    const input = {
+      interactionId: "i3",
+      scope: { guildId: "g", channelId: "c", userId: "u" },
+      url: "https://example.com/",
+    };
+    await service.review(input);
+    await expect(service.review(input)).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(calls).toBe(2);
     database.close();
   });
 });

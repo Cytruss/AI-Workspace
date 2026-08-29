@@ -46,7 +46,18 @@ export class SiteReviewService {
       initialUrl: target.canonicalUrl,
       ...(input.focus === undefined ? {} : { focus: input.focus }),
     });
-    if (review.status !== "queued") throw new Error("INTERACTION_IN_PROGRESS");
+    if (review.status !== "queued") {
+      if (
+        review.status === "completed" ||
+        review.status === "partial" ||
+        review.status === "failed" ||
+        review.status === "cancelled"
+      ) {
+        const persisted = this.dependencies.reviews.report(review.id);
+        if (persisted !== undefined) return persisted as SiteReviewReport;
+      }
+      throw new Error("INTERACTION_IN_PROGRESS");
+    }
     this.dependencies.reviews.markRunning(review.id);
     const controller = new AbortController();
     this.dependencies.activeRuns.register(
@@ -78,8 +89,18 @@ export class SiteReviewService {
       const claude =
         settled[1]?.status === "fulfilled" ? settled[1].value : undefined;
       if (codex !== undefined && claude !== undefined) {
+        this.dependencies.reviews.persistAgentResponse(
+          review.id,
+          "codex",
+          codex,
+        );
+        this.dependencies.reviews.persistAgentResponse(
+          review.id,
+          "claude",
+          claude,
+        );
         this.dependencies.reviews.markCompleted(review.id);
-        return {
+        const report: SiteReviewReport = {
           reviewId: review.id,
           status: "completed",
           results: { codex, claude },
@@ -88,14 +109,30 @@ export class SiteReviewService {
             { agentId: "claude", response: claude },
           ),
         };
+        this.dependencies.reviews.persistReport(review.id, report);
+        return report;
       }
       if (codex !== undefined || claude !== undefined) {
+        if (codex !== undefined)
+          this.dependencies.reviews.persistAgentResponse(
+            review.id,
+            "codex",
+            codex,
+          );
+        if (claude !== undefined)
+          this.dependencies.reviews.persistAgentResponse(
+            review.id,
+            "claude",
+            claude,
+          );
         this.dependencies.reviews.markPartial(review.id);
-        return {
+        const report: SiteReviewReport = {
           reviewId: review.id,
           status: "partial",
           results: { codex, claude },
         };
+        this.dependencies.reviews.persistReport(review.id, report);
+        return report;
       }
       this.dependencies.reviews.markFailed(review.id);
       return {

@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { SiteReviewAgentResponse } from "../site-review/structured-response.js";
 import type { ProjectScope } from "./project-repository.js";
 import type { SqliteDatabase } from "./database.js";
 
@@ -119,6 +120,127 @@ export class SiteReviewRepository {
   }
   markCancelled(id: string): void {
     this.transition(id, ["queued", "running"], "cancelled");
+  }
+
+  persistAgentResponse(
+    reviewId: string,
+    agentId: "codex" | "claude",
+    response: SiteReviewAgentResponse,
+  ): void {
+    const now = new Date().toISOString();
+    const runId = randomUUID();
+    this.database.transaction(() => {
+      this.database
+        .prepare(
+          "INSERT INTO site_review_agent_runs (id, review_id, agent_id, observed_model_ids_json, model_verification, gateway_session_id, status, response_json, diagnostics_json, created_at, finished_at) VALUES (?, ?, ?, '[]', 'unverified', ?, 'completed', ?, '[]', ?, ?)",
+        )
+        .run(
+          runId,
+          reviewId,
+          agentId,
+          randomUUID(),
+          JSON.stringify(response),
+          now,
+          now,
+        );
+      for (const observation of response.observations) {
+        this.database
+          .prepare(
+            "INSERT INTO site_observations (id, review_id, agent_run_id, url, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            observation.id,
+            reviewId,
+            runId,
+            observation.url,
+            JSON.stringify(observation),
+            now,
+          );
+      }
+      for (const finding of response.findings) {
+        this.database
+          .prepare(
+            "INSERT INTO site_findings (id, review_id, agent_run_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            finding.id,
+            reviewId,
+            runId,
+            finding.category,
+            JSON.stringify(finding),
+            now,
+          );
+      }
+      for (const uncertainty of response.uncertainties) {
+        this.database
+          .prepare(
+            "INSERT INTO site_uncertainties (id, review_id, agent_run_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(
+            uncertainty.id,
+            reviewId,
+            runId,
+            JSON.stringify(uncertainty),
+            now,
+          );
+      }
+      for (const recommendation of response.recommendations) {
+        this.database
+          .prepare(
+            "INSERT INTO site_recommendations (id, review_id, agent_run_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(
+            recommendation.id,
+            reviewId,
+            runId,
+            JSON.stringify(recommendation),
+            now,
+          );
+      }
+    })();
+  }
+
+  agentResponses(reviewId: string): readonly {
+    agentId: string;
+    status: string;
+    response: SiteReviewAgentResponse;
+  }[] {
+    return (
+      this.database
+        .prepare(
+          "SELECT agent_id, status, response_json FROM site_review_agent_runs WHERE review_id=? ORDER BY agent_id",
+        )
+        .all(reviewId) as {
+        agent_id: string;
+        status: string;
+        response_json: string;
+      }[]
+    ).map((row) => ({
+      agentId: row.agent_id,
+      status: row.status,
+      response: JSON.parse(row.response_json) as SiteReviewAgentResponse,
+    }));
+  }
+
+  persistReport(reviewId: string, report: unknown): void {
+    const payload = JSON.stringify(report);
+    this.database
+      .prepare(
+        "INSERT OR REPLACE INTO site_review_reports (review_id, payload_json, content_hash, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        reviewId,
+        payload,
+        createHash("sha256").update(payload).digest("hex"),
+        new Date().toISOString(),
+      );
+  }
+
+  report(reviewId: string): unknown {
+    const row = this.database
+      .prepare("SELECT payload_json FROM site_review_reports WHERE review_id=?")
+      .get(reviewId) as { payload_json: string } | undefined;
+    return row === undefined ? undefined : JSON.parse(row.payload_json);
   }
 
   private transition(

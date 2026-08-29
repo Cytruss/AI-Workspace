@@ -55,4 +55,39 @@ describe("SiteReviewRepository", () => {
     ).toHaveLength(1);
     database.close();
   });
+
+  test("persists a completed agent response and a deterministic report", () => {
+    const database = openDatabase(":memory:");
+    migrateDatabase(database);
+    const repository = new SiteReviewRepository(database);
+    const review = repository.create({
+      interactionId: "interaction-3",
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      initialUrl: "https://example.com/",
+    });
+    repository.markRunning(review.id);
+    repository.persistAgentResponse(review.id, "codex", {
+      phase: "site-review",
+      summary: "Clear pricing",
+      observations: [],
+      findings: [],
+      uncertainties: [],
+      recommendations: [],
+    });
+    repository.persistReport(review.id, {
+      status: "partial",
+      agents: ["codex"],
+    });
+
+    expect(repository.agentResponses(review.id)).toEqual([
+      expect.objectContaining({ agentId: "codex", status: "completed" }),
+    ]);
+    expect(repository.report(review.id)).toEqual({
+      status: "partial",
+      agents: ["codex"],
+    });
+    database.close();
+  });
 });
