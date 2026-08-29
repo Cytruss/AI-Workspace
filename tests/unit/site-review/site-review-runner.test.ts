@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { createSiteReviewRunner } from "../../../src/site-review/site-review-runner.js";
+import { buildSiteReviewPrompt } from "../../../src/site-review/prompt.js";
 import { SiteReviewAgentResponseSchema } from "../../../src/site-review/structured-response.js";
 import type { ReviewBrowserBinding } from "../../../src/site-review/browser/types.js";
 
@@ -65,7 +66,10 @@ describe("createSiteReviewRunner", () => {
         workingDirectory: "C:/workspace",
         browser,
         responseSchema: SiteReviewAgentResponseSchema,
-        prompt: expect.stringContaining("signup"),
+        prompt: buildSiteReviewPrompt({
+          initialUrl: "https://example.com/",
+          focus: "signup",
+        }),
       }),
       expect.any(AbortSignal),
     );
@@ -74,12 +78,10 @@ describe("createSiteReviewRunner", () => {
   test("surfaces a provider failure so the service can return partial results", async () => {
     const runAgent = createSiteReviewRunner({
       codex: {
-        runReview: vi
-          .fn()
-          .mockResolvedValue({
-            status: "failed",
-            diagnostics: ["gateway unavailable"],
-          }),
+        runReview: vi.fn().mockResolvedValue({
+          status: "failed",
+          diagnostics: ["gateway unavailable"],
+        }),
       },
       claude: { runReview: vi.fn() },
       workingDirectory: "C:/workspace",
