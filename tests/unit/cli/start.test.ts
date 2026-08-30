@@ -38,11 +38,16 @@ describe("application shutdown", () => {
 });
 
 describe("gateway loader configuration", () => {
-  test("converts a Windows loader path into a Node import URL", () => {
-    expect(
-      toNodeImportSpecifier(
-        "C:\\Users\\ostro\\AI Workspace\\node_modules\\tsx\\loader.mjs",
-      ),
-    ).toBe("file:///C:/Users/ostro/AI%20Workspace/node_modules/tsx/loader.mjs");
+  test("converts the platform loader path into a Node import URL", () => {
+    const path =
+      process.platform === "win32"
+        ? "C:\\Users\\ostro\\AI Workspace\\node_modules\\tsx\\loader.mjs"
+        : "/tmp/AI Workspace/node_modules/tsx/loader.mjs";
+    const expected =
+      process.platform === "win32"
+        ? "file:///C:/Users/ostro/AI%20Workspace/node_modules/tsx/loader.mjs"
+        : "file:///tmp/AI%20Workspace/node_modules/tsx/loader.mjs";
+
+    expect(toNodeImportSpecifier(path)).toBe(expected);
   });
 });
