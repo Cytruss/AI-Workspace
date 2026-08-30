@@ -15,6 +15,20 @@ const fixture = fileURLToPath(
   new URL("../../fixtures/agent-output/codex-success.json", import.meta.url),
 );
 
+async function withCodexCredential<T>(run: () => Promise<T>): Promise<T> {
+  const sourceHome = await mkdtemp(join(tmpdir(), "codex-test-home-"));
+  const previousHome = process.env.CODEX_HOME;
+  await writeFile(join(sourceHome, "auth.json"), "credential", "utf8");
+  process.env.CODEX_HOME = sourceHome;
+  try {
+    return await run();
+  } finally {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    await rm(sourceHome, { recursive: true, force: true });
+  }
+}
+
 describe("Codex adapter arguments and JSONL parser", () => {
   test.each([
     [
@@ -126,50 +140,52 @@ describe("Codex adapter arguments and JSONL parser", () => {
   });
 
   test("runs a website review with only its generated MCP configuration", async () => {
-    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
-    const adapter = new CodexAdapter(
-      {
-        command: "codex",
-        models: { selections: [] },
-        timeoutMs: 1_000,
-        maxOutputBytes: 1_024,
-      },
-      {
-        runProcess: (request) => {
-          calls.push({ args: request.args, env: request.env });
-          const stdout =
-            calls.length === 1
-              ? "0.76.0"
-              : calls.length === 2
-                ? "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C"
-                : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}"}}\n{"type":"turn.completed"}';
-          return Promise.resolve({
-            exitCode: 0,
-            signal: null,
-            stdout,
-            stderr: "",
-            durationMs: 1,
-            termination: "exit" as const,
-          });
-        },
-      },
-    );
-    await expect(
-      adapter.runReview(
+    await withCodexCredential(async () => {
+      const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+      const adapter = new CodexAdapter(
         {
-          workingDirectory: process.cwd(),
-          prompt: "review",
-          responseSchema: SiteReviewAgentResponseSchema,
-          browser: {
-            gateway: { command: "node", args: ["gateway.js"] },
-            toolNames: ["list_pages"] as never,
+          command: "codex",
+          models: { selections: [] },
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+        },
+        {
+          runProcess: (request) => {
+            calls.push({ args: request.args, env: request.env });
+            const stdout =
+              calls.length === 1
+                ? "0.76.0"
+                : calls.length === 2
+                  ? "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C"
+                  : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}"}}\n{"type":"turn.completed"}';
+            return Promise.resolve({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr: "",
+              durationMs: 1,
+              termination: "exit" as const,
+            });
           },
         },
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({ status: "completed" });
-    expect(calls[2]?.args).toContain("--skip-git-repo-check");
-    expect(calls[2]?.env.CODEX_HOME).toBeDefined();
+      );
+      await expect(
+        adapter.runReview(
+          {
+            workingDirectory: process.cwd(),
+            prompt: "review",
+            responseSchema: SiteReviewAgentResponseSchema,
+            browser: {
+              gateway: { command: "node", args: ["gateway.js"] },
+              toolNames: ["list_pages"] as never,
+            },
+          },
+          new AbortController().signal,
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(calls[2]?.args).toContain("--skip-git-repo-check");
+      expect(calls[2]?.env.CODEX_HOME).toBeDefined();
+    });
   });
 
   test("copies the Codex credential into the isolated review home", async () => {

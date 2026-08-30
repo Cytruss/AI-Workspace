@@ -16,6 +16,24 @@ const fixture = fileURLToPath(
   new URL("../../fixtures/agent-output/claude-success.json", import.meta.url),
 );
 
+async function withClaudeCredential<T>(run: () => Promise<T>): Promise<T> {
+  const sourceDirectory = await mkdtemp(join(tmpdir(), "claude-test-home-"));
+  const previousDirectory = process.env.CLAUDE_CONFIG_DIR;
+  await writeFile(
+    join(sourceDirectory, ".credentials.json"),
+    "credential",
+    "utf8",
+  );
+  process.env.CLAUDE_CONFIG_DIR = sourceDirectory;
+  try {
+    return await run();
+  } finally {
+    if (previousDirectory === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousDirectory;
+    await rm(sourceDirectory, { recursive: true, force: true });
+  }
+}
+
 describe("Claude adapter arguments and JSON parser", () => {
   const schema = '{"type":"object","properties":{"phase":{"const":"initial"}}}';
   const safety = [
@@ -82,50 +100,52 @@ describe("Claude adapter arguments and JSON parser", () => {
   });
 
   test("runs a website review with a strict generated MCP configuration", async () => {
-    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
-    const adapter = new ClaudeAdapter(
-      {
-        command: "claude",
-        models: { selections: [] },
-        timeoutMs: 1_000,
-        maxOutputBytes: 1_024,
-      },
-      {
-        runProcess: (request) => {
-          calls.push({ args: request.args, env: request.env });
-          const stdout =
-            calls.length === 1
-              ? "2.1.233"
-              : calls.length === 2
-                ? "--safe-mode --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort"
-                : '{"result":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}","modelUsage":{}}';
-          return Promise.resolve({
-            exitCode: 0,
-            signal: null,
-            stdout,
-            stderr: "",
-            durationMs: 1,
-            termination: "exit" as const,
-          });
-        },
-      },
-    );
-    await expect(
-      adapter.runReview(
+    await withClaudeCredential(async () => {
+      const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+      const adapter = new ClaudeAdapter(
         {
-          workingDirectory: process.cwd(),
-          prompt: "review",
-          responseSchema: SiteReviewAgentResponseSchema,
-          browser: {
-            gateway: { command: "node", args: ["gateway.js"] },
-            toolNames: ["list_pages"] as never,
+          command: "claude",
+          models: { selections: [] },
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+        },
+        {
+          runProcess: (request) => {
+            calls.push({ args: request.args, env: request.env });
+            const stdout =
+              calls.length === 1
+                ? "2.1.233"
+                : calls.length === 2
+                  ? "--safe-mode --settings --tools --disallowedTools --permission-mode --no-session-persistence -p --output-format --json-schema --model --effort"
+                  : '{"result":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}","modelUsage":{}}';
+            return Promise.resolve({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr: "",
+              durationMs: 1,
+              termination: "exit" as const,
+            });
           },
         },
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({ status: "completed" });
-    expect(calls[2]?.args).toContain("--strict-mcp-config");
-    expect(calls[2]?.env.CLAUDE_CONFIG_DIR).toBeDefined();
+      );
+      await expect(
+        adapter.runReview(
+          {
+            workingDirectory: process.cwd(),
+            prompt: "review",
+            responseSchema: SiteReviewAgentResponseSchema,
+            browser: {
+              gateway: { command: "node", args: ["gateway.js"] },
+              toolNames: ["list_pages"] as never,
+            },
+          },
+          new AbortController().signal,
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(calls[2]?.args).toContain("--strict-mcp-config");
+      expect(calls[2]?.env.CLAUDE_CONFIG_DIR).toBeDefined();
+    });
   });
 
   test("copies the Claude credential into the isolated review home", async () => {
