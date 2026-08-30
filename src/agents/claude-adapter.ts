@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, copyFile, mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentConfig } from "../config/schema.js";
 import {
@@ -179,6 +179,13 @@ function observed(output: string): string[] {
   return [
     ...new Set(Object.keys(parsed.modelUsage).map((id) => id.trim())),
   ].sort();
+}
+
+function claudeCredentialsFile(): string {
+  return join(
+    process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+    ".credentials.json",
+  );
 }
 
 export class ClaudeAdapter implements AgentAdapter {
@@ -399,6 +406,15 @@ export class ClaudeAdapter implements AgentAdapter {
       join(tmpdir(), "ai-workspace-claude-review-"),
     );
     try {
+      try {
+        await copyFile(
+          claudeCredentialsFile(),
+          join(directory, ".credentials.json"),
+        );
+        await chmod(join(directory, ".credentials.json"), 0o600);
+      } catch {
+        return { status: "failed", diagnostics: ["REVIEW_AUTH_UNAVAILABLE"] };
+      }
       const binding = renderClaudeReviewMcpConfig(request.browser);
       const result = await this.process({
         command: this.config.command,

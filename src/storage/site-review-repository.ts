@@ -200,6 +200,27 @@ export class SiteReviewRepository {
     })();
   }
 
+  persistAgentFailure(
+    reviewId: string,
+    agentId: "codex" | "claude",
+    diagnostics: readonly string[],
+  ): void {
+    const now = new Date().toISOString();
+    this.database
+      .prepare(
+        "INSERT INTO site_review_agent_runs (id, review_id, agent_id, observed_model_ids_json, model_verification, gateway_session_id, status, diagnostics_json, created_at, finished_at) VALUES (?, ?, ?, '[]', 'unverified', ?, 'failed', ?, ?, ?)",
+      )
+      .run(
+        randomUUID(),
+        reviewId,
+        agentId,
+        randomUUID(),
+        JSON.stringify(diagnostics),
+        now,
+        now,
+      );
+  }
+
   agentResponses(reviewId: string): readonly {
     agentId: string;
     status: string;
@@ -208,7 +229,7 @@ export class SiteReviewRepository {
     return (
       this.database
         .prepare(
-          "SELECT agent_id, status, response_json FROM site_review_agent_runs WHERE review_id=? ORDER BY agent_id",
+          "SELECT agent_id, status, response_json FROM site_review_agent_runs WHERE review_id=? AND status='completed' ORDER BY agent_id",
         )
         .all(reviewId) as {
         agent_id: string;

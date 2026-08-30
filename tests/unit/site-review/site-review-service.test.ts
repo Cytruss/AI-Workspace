@@ -124,4 +124,52 @@ describe("SiteReviewService", () => {
     });
     database.close();
   });
+
+  test("persists failed agent diagnostics in the replayable report", async () => {
+    const database = openDatabase(":memory:");
+    migrateDatabase(database);
+    const reviews = new SiteReviewRepository(database);
+    const service = new SiteReviewService({
+      reviews,
+      policy: new UrlPolicy({ resolveHost: async () => ["93.184.216.34"] }),
+      activeRuns: new ActiveRuns(),
+      runAgent: async ({ agentId }) => {
+        throw new Error(`${agentId} login is unavailable: Bearer secret-value`);
+      },
+    });
+
+    await expect(
+      service.review({
+        interactionId: "i5",
+        scope: { guildId: "g", channelId: "c", userId: "u" },
+        url: "https://example.com/",
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      diagnostics: {
+        codex: ["CODEX_REVIEW_FAILED"],
+        claude: ["CLAUDE_REVIEW_FAILED"],
+      },
+    });
+    const review = reviews.findByInteractionId("i5");
+    expect(
+      database
+        .prepare(
+          "SELECT agent_id, status, diagnostics_json FROM site_review_agent_runs WHERE review_id=? ORDER BY agent_id",
+        )
+        .all(review?.id),
+    ).toEqual([
+      {
+        agent_id: "claude",
+        status: "failed",
+        diagnostics_json: '["CLAUDE_REVIEW_FAILED"]',
+      },
+      {
+        agent_id: "codex",
+        status: "failed",
+        diagnostics_json: '["CODEX_REVIEW_FAILED"]',
+      },
+    ]);
+    database.close();
+  });
 });

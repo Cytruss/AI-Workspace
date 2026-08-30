@@ -1,5 +1,12 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import type { AgentConfig } from "../config/schema.js";
@@ -85,6 +92,10 @@ function stripNullObjectProperties(value: unknown): unknown {
       .filter(([, entry]) => entry !== null)
       .map(([key, entry]) => [key, stripNullObjectProperties(entry)]),
   );
+}
+
+function codexAuthFile(): string {
+  return join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json");
 }
 
 export interface CodexArgumentOptions {
@@ -430,6 +441,12 @@ export class CodexAdapter implements AgentAdapter {
     const schemaPath = join(directory, "response-schema.json");
     try {
       await mkdir(home, { recursive: true, mode: 0o700 });
+      try {
+        await copyFile(codexAuthFile(), join(home, "auth.json"));
+        await chmod(join(home, "auth.json"), 0o600);
+      } catch {
+        return { status: "failed", diagnostics: ["REVIEW_AUTH_UNAVAILABLE"] };
+      }
       await writeFile(
         join(home, "config.toml"),
         renderCodexReviewMcpConfig(request.browser),

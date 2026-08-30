@@ -1,4 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
@@ -12,6 +14,20 @@ import { SiteReviewAgentResponseSchema } from "../../../src/site-review/structur
 const fixture = fileURLToPath(
   new URL("../../fixtures/agent-output/codex-success.json", import.meta.url),
 );
+
+async function withCodexCredential<T>(run: () => Promise<T>): Promise<T> {
+  const sourceHome = await mkdtemp(join(tmpdir(), "codex-test-home-"));
+  const previousHome = process.env.CODEX_HOME;
+  await writeFile(join(sourceHome, "auth.json"), "credential", "utf8");
+  process.env.CODEX_HOME = sourceHome;
+  try {
+    return await run();
+  } finally {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    await rm(sourceHome, { recursive: true, force: true });
+  }
+}
 
 describe("Codex adapter arguments and JSONL parser", () => {
   test.each([
@@ -124,50 +140,166 @@ describe("Codex adapter arguments and JSONL parser", () => {
   });
 
   test("runs a website review with only its generated MCP configuration", async () => {
-    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
-    const adapter = new CodexAdapter(
-      {
-        command: "codex",
-        models: { selections: [] },
-        timeoutMs: 1_000,
-        maxOutputBytes: 1_024,
-      },
-      {
-        runProcess: (request) => {
-          calls.push({ args: request.args, env: request.env });
-          const stdout =
-            calls.length === 1
-              ? "0.76.0"
-              : calls.length === 2
-                ? "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C"
-                : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}"}}\n{"type":"turn.completed"}';
-          return Promise.resolve({
-            exitCode: 0,
-            signal: null,
-            stdout,
-            stderr: "",
-            durationMs: 1,
-            termination: "exit" as const,
-          });
-        },
-      },
-    );
-    await expect(
-      adapter.runReview(
+    await withCodexCredential(async () => {
+      const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+      const adapter = new CodexAdapter(
         {
-          workingDirectory: process.cwd(),
-          prompt: "review",
-          responseSchema: SiteReviewAgentResponseSchema,
-          browser: {
-            gateway: { command: "node", args: ["gateway.js"] },
-            toolNames: ["list_pages"] as never,
+          command: "codex",
+          models: { selections: [] },
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+        },
+        {
+          runProcess: (request) => {
+            calls.push({ args: request.args, env: request.env });
+            const stdout =
+              calls.length === 1
+                ? "0.76.0"
+                : calls.length === 2
+                  ? "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C"
+                  : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}"}}\n{"type":"turn.completed"}';
+            return Promise.resolve({
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr: "",
+              durationMs: 1,
+              termination: "exit" as const,
+            });
           },
         },
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({ status: "completed" });
-    expect(calls[2]?.args).toContain("--skip-git-repo-check");
-    expect(calls[2]?.env.CODEX_HOME).toBeDefined();
+      );
+      await expect(
+        adapter.runReview(
+          {
+            workingDirectory: process.cwd(),
+            prompt: "review",
+            responseSchema: SiteReviewAgentResponseSchema,
+            browser: {
+              gateway: { command: "node", args: ["gateway.js"] },
+              toolNames: ["list_pages"] as never,
+            },
+          },
+          new AbortController().signal,
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(calls[2]?.args).toContain("--skip-git-repo-check");
+      expect(calls[2]?.env.CODEX_HOME).toBeDefined();
+    });
+  });
+
+  test("copies the Codex credential into the isolated review home", async () => {
+    const sourceHome = await mkdtemp(join(tmpdir(), "codex-source-home-"));
+    const previousHome = process.env.CODEX_HOME;
+    await writeFile(join(sourceHome, "auth.json"), "credential", "utf8");
+    process.env.CODEX_HOME = sourceHome;
+    let copiedCredential: string | undefined;
+    try {
+      const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+      const adapter = new CodexAdapter(
+        {
+          command: "codex",
+          models: { selections: [] },
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+        },
+        {
+          runProcess: async (request) => {
+            calls.push({ args: request.args, env: request.env });
+            if (calls.length === 3)
+              copiedCredential = await readFile(
+                join(request.env.CODEX_HOME as string, "auth.json"),
+                "utf8",
+              );
+            const stdout =
+              calls.length === 1
+                ? "0.76.0"
+                : calls.length === 2
+                  ? "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C"
+                  : '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"phase\\":\\"site-review\\",\\"summary\\":\\"ok\\",\\"observations\\":[],\\"findings\\":[],\\"uncertainties\\":[],\\"recommendations\\":[]}"}}\n{"type":"turn.completed"}';
+            return {
+              exitCode: 0,
+              signal: null,
+              stdout,
+              stderr: "",
+              durationMs: 1,
+              termination: "exit" as const,
+            };
+          },
+        },
+      );
+      await expect(
+        adapter.runReview(
+          {
+            workingDirectory: process.cwd(),
+            prompt: "review",
+            responseSchema: SiteReviewAgentResponseSchema,
+            browser: {
+              gateway: { command: "node", args: ["gateway.js"] },
+              toolNames: ["list_pages"] as never,
+            },
+          },
+          new AbortController().signal,
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(copiedCredential).toBe("credential");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      await rm(sourceHome, { recursive: true, force: true });
+    }
+  });
+
+  test("reports unavailable Codex credentials without leaking their path", async () => {
+    const sourceHome = await mkdtemp(join(tmpdir(), "codex-empty-home-"));
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = sourceHome;
+    try {
+      const output = [
+        "0.76.0",
+        "--ephemeral --ignore-user-config --ignore-rules --json --output-schema --model --config -C",
+      ];
+      const adapter = new CodexAdapter(
+        {
+          command: "codex",
+          models: { selections: [] },
+          timeoutMs: 1_000,
+          maxOutputBytes: 1_024,
+        },
+        {
+          runProcess: () =>
+            Promise.resolve({
+              exitCode: 0,
+              signal: null,
+              stdout: output.shift() ?? "",
+              stderr: "",
+              durationMs: 1,
+              termination: "exit" as const,
+            }),
+        },
+      );
+      await expect(
+        adapter.runReview(
+          {
+            workingDirectory: process.cwd(),
+            prompt: "review",
+            responseSchema: SiteReviewAgentResponseSchema,
+            browser: {
+              gateway: { command: "node", args: ["gateway.js"] },
+              toolNames: ["list_pages"] as never,
+            },
+          },
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({
+        status: "failed",
+        diagnostics: ["REVIEW_AUTH_UNAVAILABLE"],
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      await rm(sourceHome, { recursive: true, force: true });
+    }
   });
 
   test("extracts the completed structured JSON response from JSONL", async () => {

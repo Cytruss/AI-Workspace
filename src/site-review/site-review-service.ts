@@ -19,6 +19,7 @@ export interface SiteReviewReport {
     Record<"codex" | "claude", SiteReviewAgentResponse | undefined>
   >;
   comparison?: SiteReviewComparison;
+  diagnostics?: Partial<Record<"codex" | "claude", readonly string[]>>;
 }
 
 export interface SiteReviewServiceDependencies {
@@ -32,6 +33,21 @@ export interface SiteReviewServiceDependencies {
     focus?: string;
     signal: AbortSignal;
   }): Promise<SiteReviewAgentResponse>;
+}
+
+function failureDiagnostic(
+  agentId: "codex" | "claude",
+  reason: unknown,
+): string {
+  const safeCodes = new Set([
+    `${agentId.toUpperCase()}_REVIEW_FAILED`,
+    `${agentId.toUpperCase()}_REVIEW_CANCELLED`,
+    `${agentId.toUpperCase()}_REVIEW_TIMED_OUT`,
+    `${agentId.toUpperCase()}_REVIEW_AUTH_UNAVAILABLE`,
+  ]);
+  return reason instanceof Error && safeCodes.has(reason.message)
+    ? reason.message
+    : `${agentId.toUpperCase()}_REVIEW_FAILED`;
 }
 
 export class SiteReviewService {
@@ -92,6 +108,22 @@ export class SiteReviewService {
         settled[0]?.status === "fulfilled" ? settled[0].value : undefined;
       const claude =
         settled[1]?.status === "fulfilled" ? settled[1].value : undefined;
+      const diagnostics: Partial<
+        Record<"codex" | "claude", readonly string[]>
+      > = {};
+      for (const [index, agentId] of (["codex", "claude"] as const).entries()) {
+        const result = settled[index];
+        if (result?.status !== "rejected") continue;
+        const failure = [failureDiagnostic(agentId, result.reason)];
+        diagnostics[agentId] = failure;
+        this.dependencies.reviews.persistAgentFailure(
+          review.id,
+          agentId,
+          failure,
+        );
+      }
+      const reportDiagnostics =
+        Object.keys(diagnostics).length === 0 ? {} : { diagnostics };
       if (codex !== undefined && claude !== undefined) {
         this.dependencies.reviews.persistAgentResponse(
           review.id,
@@ -112,6 +144,7 @@ export class SiteReviewService {
             { agentId: "codex", response: codex },
             { agentId: "claude", response: claude },
           ),
+          ...reportDiagnostics,
         };
         this.dependencies.reviews.persistReport(review.id, report);
         return report;
@@ -134,6 +167,7 @@ export class SiteReviewService {
           reviewId: review.id,
           status: "partial",
           results: { codex, claude },
+          ...reportDiagnostics,
         };
         this.dependencies.reviews.persistReport(review.id, report);
         return report;
@@ -143,6 +177,7 @@ export class SiteReviewService {
         reviewId: review.id,
         status: "failed",
         results: { codex, claude },
+        ...reportDiagnostics,
       };
       this.dependencies.reviews.persistReport(review.id, report);
       return report;

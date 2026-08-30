@@ -76,6 +76,15 @@ function providerDefaultWarning(result: AgentResult): string | undefined {
     : undefined;
 }
 
+function siteReviewFailureDiagnostic(
+  diagnostics: readonly string[] | undefined,
+): string | undefined {
+  if (diagnostics === undefined || diagnostics.length === 0) return undefined;
+  return diagnostics.some((message) => /auth|credential|login/i.test(message))
+    ? "Provider authentication is unavailable for this review."
+    : "Safe diagnostics: provider execution failed; inspect persisted review diagnostics.";
+}
+
 export function formatModels(models: ProviderModels): DiscordPayload {
   const provider = (id: "codex" | "claude") => {
     const settings = models[id];
@@ -166,8 +175,15 @@ export function formatSiteReviewReport(
 ): DiscordPayload {
   const details = (["codex", "claude"] as const).flatMap((agentId) => {
     const response = report.results[agentId];
+    const diagnostic = siteReviewFailureDiagnostic(
+      report.diagnostics?.[agentId],
+    );
     return response === undefined
-      ? [`## ${agentName(agentId)}`, "No completed result."]
+      ? [
+          `## ${agentName(agentId)}`,
+          "No completed result.",
+          ...(diagnostic === undefined ? [] : [diagnostic]),
+        ]
       : [
           `## ${agentName(agentId)}`,
           response.summary,
