@@ -4,6 +4,7 @@ import {
   formatDebateReport,
   formatDebateReportParts,
   formatModels,
+  formatSiteReviewReport,
 } from "../../../../src/transport/discord/response-format.js";
 
 describe("Discord response formatting", () => {
@@ -72,6 +73,22 @@ describe("Discord response formatting", () => {
     expect(payload.content).toContain("Verification: verified");
     expect(payload.content).toContain("## Claude");
     expect(payload.content).not.toContain("/private/value");
+  });
+
+  test("shows failed website-review diagnostics", () => {
+    const payload = formatSiteReviewReport({
+      reviewId: "review-1",
+      status: "failed",
+      results: { codex: undefined, claude: undefined },
+      diagnostics: {
+        codex: ["CODEX_REVIEW_AUTH_UNAVAILABLE"],
+        claude: ["CLAUDE_REVIEW_AUTH_UNAVAILABLE"],
+      },
+    });
+    expect(payload.content).toContain(
+      "Provider authentication is unavailable for this review.",
+    );
+    expect(payload.content).not.toContain("AUTH_UNAVAILABLE");
   });
 
   test("shows successful provider-default content with an unverified warning", () => {

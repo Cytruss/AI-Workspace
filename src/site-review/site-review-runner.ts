@@ -49,8 +49,9 @@ export function createSiteReviewRunner(
     );
     if (result.status === "completed" && result.response !== undefined)
       return result.response;
-    throw new Error(
-      `${agentId} ${result.status}: ${result.diagnostics.join("; ") || "no diagnostics"}`,
-    );
+    const suffix = result.diagnostics.includes("REVIEW_AUTH_UNAVAILABLE")
+      ? "AUTH_UNAVAILABLE"
+      : result.status.toUpperCase();
+    throw new Error(`${agentId.toUpperCase()}_REVIEW_${suffix}`);
   };
 }

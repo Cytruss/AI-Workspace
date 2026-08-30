@@ -95,6 +95,6 @@ describe("createSiteReviewRunner", () => {
         url: "https://example.com/",
         signal: new AbortController().signal,
       }),
-    ).rejects.toThrow("codex failed: gateway unavailable");
+    ).rejects.toThrow("CODEX_REVIEW_FAILED");
   });
 });
