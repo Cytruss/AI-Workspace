@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { config as loadEnvironment } from "dotenv";
 import { AgentRegistry } from "../agents/agent-registry.js";
 import { ClaudeAdapter } from "../agents/claude-adapter.js";
@@ -39,6 +39,10 @@ interface ShutdownDependencies {
   activeRuns: Pick<ActiveRuns, "cancelAll" | "list">;
   closeDatabase: () => void;
   exit?: (code: number) => void;
+}
+
+export function toNodeImportSpecifier(path: string): string {
+  return pathToFileURL(path).href;
 }
 
 export function createShutdownHandler(dependencies: ShutdownDependencies) {
@@ -111,7 +115,9 @@ export async function startApplication(): Promise<void> {
   const gatewaySource = fileURLToPath(
     new URL("../site-review/browser/gateway-server.ts", import.meta.url),
   );
-  const tsxLoader = createRequire(import.meta.url).resolve("tsx/esm");
+  const tsxLoader = toNodeImportSpecifier(
+    createRequire(import.meta.url).resolve("tsx/esm"),
+  );
   const siteReviews = new SiteReviewRepository(database);
   const siteReviewService = new SiteReviewService({
     reviews: siteReviews,
