@@ -14,6 +14,7 @@ import {
   validateModelCapabilities,
 } from "./agent-registry.js";
 import { requireHelpFlags } from "./help-capabilities.js";
+import { stripOutputSchemaFormats } from "./output-schema.js";
 import { buildSafeEnvironment } from "./safe-environment.js";
 import type { ReviewBrowserBinding } from "../site-review/browser/types.js";
 import { renderClaudeReviewMcpConfig } from "../site-review/browser/provider-binding.js";
@@ -275,7 +276,9 @@ export class ClaudeAdapter implements AgentAdapter {
         "OBSERVE mode with a response schema is required",
       ]);
     const schema = JSON.stringify(
-      z.toJSONSchema(request.responseSchema, { target: "draft-07" }),
+      stripOutputSchemaFormats(
+        z.toJSONSchema(request.responseSchema, { target: "draft-07" }),
+      ),
     );
     if (Buffer.byteLength(schema, "utf8") > MAX_RESPONSE_SCHEMA_BYTES)
       return this.failed(request, 0, ["Response schema exceeds 32768 bytes"]);
@@ -420,7 +423,9 @@ export class ClaudeAdapter implements AgentAdapter {
         command: this.config.command,
         args: buildClaudeReviewArguments({
           schema: JSON.stringify(
-            z.toJSONSchema(request.responseSchema, { target: "draft-07" }),
+            stripOutputSchemaFormats(
+              z.toJSONSchema(request.responseSchema, { target: "draft-07" }),
+            ),
           ),
           mcpConfig: binding.config,
           allowedMcpTools: binding.allowedTools,

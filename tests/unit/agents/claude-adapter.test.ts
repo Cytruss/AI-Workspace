@@ -145,6 +145,8 @@ describe("Claude adapter arguments and JSON parser", () => {
       ).resolves.toMatchObject({ status: "completed" });
       expect(calls[2]?.args).toContain("--strict-mcp-config");
       expect(calls[2]?.env.CLAUDE_CONFIG_DIR).toBeDefined();
+      const schemaIndex = calls[2]?.args.indexOf("--json-schema") ?? -1;
+      expect(calls[2]?.args[schemaIndex + 1]).not.toContain('"format":"uri"');
     });
   });
 
