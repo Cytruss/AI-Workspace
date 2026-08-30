@@ -3,11 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import {
   CodexAdapter,
   buildCodexArguments,
   buildCodexReviewArguments,
   parseCodexJsonl,
+  strictCodexOutputSchema,
 } from "../../../src/agents/codex-adapter.js";
 import { SiteReviewAgentResponseSchema } from "../../../src/site-review/structured-response.js";
 
@@ -30,6 +32,14 @@ async function withCodexCredential<T>(run: () => Promise<T>): Promise<T> {
 }
 
 describe("Codex adapter arguments and JSONL parser", () => {
+  test("removes unsupported URI formats from generated output schemas", () => {
+    const schema = strictCodexOutputSchema(
+      z.toJSONSchema(SiteReviewAgentResponseSchema),
+    );
+
+    expect(JSON.stringify(schema)).not.toContain('"format":"uri"');
+  });
+
   test.each([
     [
       "provider default",

@@ -47,11 +47,12 @@ function isImpossibleSchema(value: unknown): boolean {
   );
 }
 
-function strictCodexOutputSchema(value: unknown): unknown {
+export function strictCodexOutputSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(strictCodexOutputSchema);
   if (!isRecord(value)) return value;
   const schema: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
+    if (key === "format") continue;
     schema[key] =
       key === "additionalProperties" &&
       isRecord(entry) &&
