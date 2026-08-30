@@ -1,5 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
-import { createShutdownHandler } from "../../../src/cli/start.js";
+import {
+  createShutdownHandler,
+  toNodeImportSpecifier,
+} from "../../../src/cli/start.js";
 
 describe("application shutdown", () => {
   test("stops input, cancels work, closes resources, and exits exactly once", async () => {
@@ -31,5 +34,20 @@ describe("application shutdown", () => {
       "exit:0",
     ]);
     expect(exit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("gateway loader configuration", () => {
+  test("converts the platform loader path into a Node import URL", () => {
+    const path =
+      process.platform === "win32"
+        ? "C:\\Users\\ostro\\AI Workspace\\node_modules\\tsx\\loader.mjs"
+        : "/tmp/AI Workspace/node_modules/tsx/loader.mjs";
+    const expected =
+      process.platform === "win32"
+        ? "file:///C:/Users/ostro/AI%20Workspace/node_modules/tsx/loader.mjs"
+        : "file:///tmp/AI%20Workspace/node_modules/tsx/loader.mjs";
+
+    expect(toNodeImportSpecifier(path)).toBe(expected);
   });
 });
